@@ -1,0 +1,28 @@
+{
+  "clarity": {
+    "score": 8,
+    "rationale": "The message is concise and the single takeaway is clear within 3 seconds.",
+    "confidence": 9
+  },
+  "value_proposition": {
+    "score": 7,
+    "rationale": "Mentions score improvement benefit but could include stronger proof or specificity.",
+    "confidence": 7
+  },
+  "cta": {
+    "score": 9,
+    "rationale": "Strong, specific call to action with low friction.",
+    "confidence": 9
+  },
+  "brand_voice": {
+    "score": 8,
+    "rationale": "Empowering and results-focused; aligns with Varsity Tutors tone.",
+    "confidence": 8
+  },
+  "emotional_resonance": {
+    "score": 7,
+    "rationale": "Taps into parent/student motivation; could deepen with a clearer emotional hook.",
+    "confidence": 6
+  },
+  "overall_score": 7.8
+}

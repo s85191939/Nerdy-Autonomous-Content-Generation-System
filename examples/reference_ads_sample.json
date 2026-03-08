@@ -1,0 +1,22 @@
+[
+  {
+    "id": "reference_good_1",
+    "expected_tier": "good",
+    "ad_copy": {
+      "primary_text": "Is your child's SAT score holding them back? Students who prep with 1-on-1 tutoring score 200+ points higher on average. Start your free practice test today.",
+      "headline": "Raise Your SAT Score 200+ Points",
+      "description": "Varsity Tutors. Live, personalized SAT prep.",
+      "cta": "Start your free practice test"
+    }
+  },
+  {
+    "id": "reference_bad_1",
+    "expected_tier": "bad",
+    "ad_copy": {
+      "primary_text": "We have tutors. Learn more.",
+      "headline": "Tutoring",
+      "description": "Contact us.",
+      "cta": "Learn More"
+    }
+  }
+]
