@@ -17,11 +17,21 @@ source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Set your API key:
+Set at least one API key (used in fallback order so the product keeps working):
 
 ```bash
-export GEMINI_API_KEY="your-key"   # or add to .env
+export GEMINI_API_KEY="your-key"   # or add to .env — tried first
 ```
+
+**Fallback (automatic):** If Gemini fails (quota, 401, etc.), the app tries **OpenRouter** then **OpenAI** so you get ads instead of errors. Set any of:
+
+```bash
+export OPENROUTER_API_KEY="your-openrouter-key"   # free models at openrouter.ai/keys
+export OPENROUTER_MODEL="openrouter/free"         # optional
+export OPENAI_API_KEY="your-openai-key"          # optional third fallback
+```
+
+Priority: **Gemini → OpenRouter → OpenAI**. Only configured backends are used; at least one required.
 
 ## Usage
 
@@ -58,7 +68,7 @@ Run the web UI for a simpler workflow (configure run, see progress, download out
 ./scripts/run_web.sh
 ```
 
-Then open **http://127.0.0.1:8080**. Set `GEMINI_API_KEY` in `.env` or your environment first.
+Then open **http://127.0.0.1:8080**. Set `GEMINI_API_KEY` in `.env` (or use the **OpenRouter** section in the form for free models).
 
 ## Project Structure
 
@@ -89,31 +99,37 @@ output/         # Generated reports (gitignored)
 
 - **Quality (25%):** 5 dimensions with clear rubrics, LLM-as-judge with rationales, **confidence scoring** per dimension, 7.0+ threshold, dimension weights documented. **Calibrate** with `scripts/calibrate_evaluator.py` and reference ads from Slack.
 - **System Design (20%):** Modular architecture, **failure detection and recovery** (retries with backoff), one-command setup, **15+ tests**, deterministic. **Context management** documented in Decision log §11.
-- **Iteration (20%):** **5+ iteration cycles** (default `--max-iterations 6`), measurable gains, **which interventions improved which dimensions** in `iteration_history` (targeted_dimension), **performance-per-token awareness** (see `ad_engine.metrics.performance_metrics` and [Rate limits and cost](docs/RATE_LIMITS_AND_COST.md)).
+- **Iteration (20%):** **5+ iteration cycles** (default `--max-iterations 6`), measurable gains, **which interventions improved which dimensions** in `iteration_history` (targeted_dimension), **performance-per-token awareness** (see `ad_engine.metrics` and Dashboard).
 - **Speed (15%):** Batch generation 50+ ads, minimal human intervention. **Smart resource allocation:** single model (Gemini Flash) for both generation and evaluation to reduce cost.
 - **Documentation (20%):** Decision log with **WHY**; **failed approaches and where it breaks** (§12); honest limitations; independent thinking.
-- **Bonus:** Quality trend visualization (+2); ROI/token awareness (+2). See [EXPERIMENTS.md](docs/EXPERIMENTS.md) for performance-per-token tracking options.
+- **Bonus:** Quality trend visualization (+2); ROI/token awareness (+2). See `output/` and Dashboard after a run.
 
 ## Docs
 
-- [System Design](docs/SYSTEM_DESIGN.md) — **Canonical** combined design (spec + pre-search + FAANG-style); start here.
-- [Technical Design](docs/TECHNICAL_DESIGN.md) — Short pointer to SYSTEM_DESIGN and PDFs.
-- [Decision Log](docs/DECISION_LOG.md) — design choices and tradeoffs.
-- [Starter Kit](docs/STARTER_KIT.md) — model recommendations, evaluation workflow, getting started (per project spec).
-- [Experiments](docs/EXPERIMENTS.md) — how to run single vs multi-LLM, full vs targeted regeneration, and cheap vs expensive model experiments.
-- [Rate limits and cost](docs/RATE_LIMITS_AND_COST.md) — API rate limits and cost considerations.
+We keep **6 docs**; the rest is in README and code.
+
+- [**Deliverables**](docs/DELIVERABLES.md) — Checklist (pipeline, evaluation, loop, 50+ ads, decision log, evaluation report) + v1 spec alignment + v2 future.
+- [**Decision log**](docs/DECISION_LOG.md) — Design choices, tradeoffs, limitations, failed approaches. *Matters as much as the output.*
+- [**System design**](docs/SYSTEM_DESIGN.md) — Canonical design (spec + pre-search + FAANG-style).
+- [**Technical writeup**](docs/TECHNICAL_WRITEUP.md) — 1–2 page summary, architecture, quality metrics, how to run.
+- [**AI tools and prompts**](docs/AI_TOOLS_AND_PROMPTS.md) — Models and prompts used.
+- [**Demo walkthrough**](docs/DEMO_WALKTHROUGH.md) — Script for demo video or live walkthrough.
+
+**What we're evaluated on:** Problem decomposition, taste and judgment, creative agency, systems thinking, iteration methodology, and the decision log. This repo addresses each: five measurable dimensions and a generate→evaluate→improve loop (decomposition); rubrics and calibration (taste); working PoC with fallbacks (agency); retries and failure handling (systems); targeted regeneration and iteration_history (methodology); DECISION_LOG documents why and where it breaks.
+
 - **All PDFs** are in `docs/`: project spec, pre-search design, FAANG-style sysdesign.
 
 ### Submission checklist
 
 | Requirement | Location |
 |-------------|----------|
+| **Deliverables checklist** (pipeline, evaluation, feedback loop, 50+ ads, decision log, evaluation report) | [docs/DELIVERABLES.md](docs/DELIVERABLES.md) |
 | Code repository | GitHub (see top of README) |
 | Brief technical writeup (1–2 pages) | [docs/TECHNICAL_WRITEUP.md](docs/TECHNICAL_WRITEUP.md) |
 | Documentation of AI tools and prompts | [docs/AI_TOOLS_AND_PROMPTS.md](docs/AI_TOOLS_AND_PROMPTS.md) |
 | Demo video or live walkthrough | Use [docs/DEMO_WALKTHROUGH.md](docs/DEMO_WALKTHROUGH.md) as script |
 | Generated ad samples with evaluation scores | [examples/generated_ad_samples.json](examples/generated_ad_samples.json) |
-| Quality improvement metrics and visualizations | [docs/QUALITY_IMPROVEMENT_METRICS.md](docs/QUALITY_IMPROVEMENT_METRICS.md); outputs in `output/` after a run |
+| Quality improvement metrics and visualizations | TECHNICAL_WRITEUP §Quality improvement; outputs in `output/` after a run |
 | Decision log | [docs/DECISION_LOG.md](docs/DECISION_LOG.md) |
 
 ## License

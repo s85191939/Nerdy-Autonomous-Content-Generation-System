@@ -11,7 +11,7 @@ Submission requirement: document AI tools and prompts used.
 - **Generation:** One API call per ad (or per improvement step). Input: system prompt (brand + format) + user message (brief or improvement instruction). Output: JSON with `primary_text`, `headline`, `description`, `cta`.
 - **Evaluation:** One API call per ad. Input: system prompt (rubrics + confidence) + user message (ad JSON). Output: JSON with per-dimension `score`, `rationale`, `confidence`.
 
-No other AI tools (e.g. OpenAI, Claude) are used in the default pipeline. The design allows swapping in a different model for the evaluator for experiments (see `docs/EXPERIMENTS.md`).
+No other AI tools (e.g. OpenAI, Claude) are used in the default pipeline unless configured; the design allows swapping in a different model for the evaluator (see DECISION_LOG §2).
 
 ## Prompts
 

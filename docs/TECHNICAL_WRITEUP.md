@@ -44,6 +44,10 @@ export GEMINI_API_KEY="your-key"
 
 Calibrate the evaluator on reference ads before a full run: `python scripts/calibrate_evaluator.py examples/reference_ads_sample.json`.
 
+## Quality improvement metrics and visualizations
+
+We track: **per-ad scores** (overall + 5 dimensions) in `evaluation_report.csv` and `ads_dataset.json`; **iteration history** per ad with `targeted_dimension` in `ads_dataset.json`; **run summary** in `evaluation_summary.txt`; **quality trend** chart in `output/iteration_quality_chart.png`; **ROI** (accepted per 1K tokens, cost) in `run_history.json` and the web Dashboard. After any run, see `output/` for these files.
+
 ## References
 
 - **System design:** `docs/SYSTEM_DESIGN.md`

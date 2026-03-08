@@ -54,6 +54,6 @@ export GEMINI_API_KEY="your-key"
 ## 7. Wrap-up
 
 - Point to **docs/TECHNICAL_WRITEUP.md** for a 1–2 page summary and **docs/AI_TOOLS_AND_PROMPTS.md** for prompts.
-- Mention **generated ad samples** in **examples/generated_ad_samples.json** and **quality metrics** in **docs/QUALITY_IMPROVEMENT_METRICS.md**.
+- Mention **generated ad samples** in **examples/generated_ad_samples.json** and **quality metrics** in **docs/TECHNICAL_WRITEUP.md** (§ Quality improvement).
 
 Total: ~7–8 minutes for a concise walkthrough; extend with more ads or deeper dives into code as needed.

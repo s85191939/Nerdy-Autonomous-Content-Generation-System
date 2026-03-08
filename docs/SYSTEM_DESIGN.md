@@ -223,5 +223,5 @@ Automatic deductions apply for no demo, can’t run, &lt;50 ads, no evaluation s
 - **Project spec:** [Nerdy- Autonomous Content Generation System.pdf](Nerdy-%20Autonomous%20Content%20Generation%20System.pdf)
 - **Pre-search technical design:** [autonomous_ad_engine_presearch_design.pdf](autonomous_ad_engine_presearch_design.pdf)
 - **FAANG-style system design:** [faang_style_autonomous_ad_engine_sysdesign.pdf](faang_style_autonomous_ad_engine_sysdesign.pdf)
-- **Starter kit:** [STARTER_KIT.md](STARTER_KIT.md) — model recommendations, evaluation workflow, getting started.
+- **Setup and usage:** README — model recommendations, evaluation workflow, getting started.
 - **Decision log:** [DECISION_LOG.md](DECISION_LOG.md) — design choices, tradeoffs, failed approaches, limitations.

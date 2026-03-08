@@ -20,3 +20,11 @@ DIMENSION_NAMES = [
     "brand_voice",
     "emotional_resonance",
 ]
+
+# Fallback ad when generation fails (ensures pipeline never returns "no result")
+FALLBACK_AD = {
+    "primary_text": "We're here to help your student reach their goals. Get expert support today.",
+    "headline": "Expert Tutoring Support",
+    "description": "Quality tutoring when you need it.",
+    "cta": "Learn More",
+}

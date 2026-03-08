@@ -2,6 +2,8 @@
 
 Documenting design choices, tradeoffs, and limitations for the Autonomous Ad Generation System.
 
+**What we're really being evaluated on:** Problem decomposition, taste and judgment, creative agency, systems thinking, iteration methodology, and this log itself. The README summarizes how this project addresses those criteria; this log is the main place we show reasoning and tradeoffs.
+
 ## 1. Evaluation-first architecture
 
 **Decision:** Build the evaluator before scaling the generator, and calibrate on reference ads.
@@ -63,13 +65,13 @@ Documenting design choices, tradeoffs, and limitations for the Autonomous Ad Gen
 
 ---
 
-## 7. Performance-per-token tracking
+## 7. Performance-per-token and ROI tracking
 
-**Decision:** Implement a `PerformanceMetrics` module that can record (cycle, avg_score, token_cost, num_ads) and compute performance_per_token = avg_score / token_cost. No automatic token counting in v1.
+**Decision:** Implement token tracking and cost estimation so ROI is measurable: "was it worth the tokens?"
 
-**Rationale:** API clients used here do not always expose token usage easily; manual or optional instrumentation keeps the pipeline runnable without extra APIs. Structure is in place for v2/v3 to plug in real costs.
+**Rationale:** The real metric is value per token (or per dollar), not just "did the AI generate something?" We added `TokenTracker` (input/output tokens from Gemini, OpenRouter, OpenAI responses), estimated cost per run, and ROI metrics: accepted ads per 1K tokens, score per dollar. Run history is persisted to `output/run_history.json` and surfaced on the **ROI Dashboard** (`/dashboard`).
 
-**Tradeoff:** Metric is 0 or placeholder until token/cost tracking is added.
+**Tradeoff:** Cost is estimated from list pricing; actual billing may differ. Token counts are accurate when the API returns usage (Gemini, OpenRouter, OpenAI all do).
 
 ---
 
@@ -88,7 +90,7 @@ Documenting design choices, tradeoffs, and limitations for the Autonomous Ad Gen
 - **LLM evaluator bias:** Scores may be inconsistent or biased toward certain phrasings.
 - **No real campaign data:** Quality is predicted, not measured by clicks/conversions.
 - **Brand voice:** Calibration depends on prompt quality and optional reference ads from Slack.
-- **Token cost:** Not measured automatically in v1; performance_per_token is structural only until wired to usage APIs.
+- **Token cost:** Now measured automatically (see §7). TokenTracker and run_history.json feed the ROI dashboard.
 - **Single channel:** Only FB/IG copy; no email, landing pages, or creative images in v1.
 - **Confidence scoring:** Implemented: each dimension has a 1–10 confidence score and the evaluator returns an aggregate; low confidence signals uncertainty.
 
