@@ -35,3 +35,6 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Personal study / interview prep (not project docs)
+STUDY_GUIDE.md

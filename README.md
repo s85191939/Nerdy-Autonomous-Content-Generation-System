@@ -50,6 +50,16 @@ Run tests (**15+ unit/integration tests**, deterministic):
 PYTHONPATH=. pytest tests/ -v
 ```
 
+### Web interface
+
+Run the web UI for a simpler workflow (configure run, see progress, download outputs):
+
+```bash
+./scripts/run_web.sh
+```
+
+Then open **http://127.0.0.1:8080**. Set `GEMINI_API_KEY` in `.env` or your environment first.
+
 ## Project Structure
 
 ```
@@ -86,12 +96,25 @@ output/         # Generated reports (gitignored)
 
 ## Docs
 
+- [System Design](docs/SYSTEM_DESIGN.md) — **Canonical** combined design (spec + pre-search + FAANG-style); start here.
+- [Technical Design](docs/TECHNICAL_DESIGN.md) — Short pointer to SYSTEM_DESIGN and PDFs.
 - [Decision Log](docs/DECISION_LOG.md) — design choices and tradeoffs.
-- [Starter Kit](docs/STARTER_KIT.md) — model recommendations, evaluation workflow, getting started (per project PDF).
-- [Technical Design](docs/TECHNICAL_DESIGN.md) — full architecture; references pre-search and FAANG-style design PDFs in `docs/`.
+- [Starter Kit](docs/STARTER_KIT.md) — model recommendations, evaluation workflow, getting started (per project spec).
 - [Experiments](docs/EXPERIMENTS.md) — how to run single vs multi-LLM, full vs targeted regeneration, and cheap vs expensive model experiments.
 - [Rate limits and cost](docs/RATE_LIMITS_AND_COST.md) — API rate limits and cost considerations.
-- **Design PDFs** (in `docs/`): `autonomous_ad_engine_presearch_design.pdf`, `faang_style_autonomous_ad_engine_sysdesign.pdf`.
+- **All PDFs** are in `docs/`: project spec, pre-search design, FAANG-style sysdesign.
+
+### Submission checklist
+
+| Requirement | Location |
+|-------------|----------|
+| Code repository | GitHub (see top of README) |
+| Brief technical writeup (1–2 pages) | [docs/TECHNICAL_WRITEUP.md](docs/TECHNICAL_WRITEUP.md) |
+| Documentation of AI tools and prompts | [docs/AI_TOOLS_AND_PROMPTS.md](docs/AI_TOOLS_AND_PROMPTS.md) |
+| Demo video or live walkthrough | Use [docs/DEMO_WALKTHROUGH.md](docs/DEMO_WALKTHROUGH.md) as script |
+| Generated ad samples with evaluation scores | [examples/generated_ad_samples.json](examples/generated_ad_samples.json) |
+| Quality improvement metrics and visualizations | [docs/QUALITY_IMPROVEMENT_METRICS.md](docs/QUALITY_IMPROVEMENT_METRICS.md); outputs in `output/` after a run |
+| Decision log | [docs/DECISION_LOG.md](docs/DECISION_LOG.md) |
 
 ## License
 

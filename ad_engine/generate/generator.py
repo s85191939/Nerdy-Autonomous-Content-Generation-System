@@ -45,9 +45,8 @@ class AdGenerator:
     def __init__(self, model=None, seed: Optional[int] = None):
         self._model = model or _get_client()
         self._seed = seed
-        self._generation_config = {}
-        if seed is not None:
-            self._generation_config["random_seed"] = seed
+        # GenerationConfig does not support random_seed in current Gemini SDK; seed still used for brief order in CLI
+        self._generation_config = None
 
     def generate(self, brief: dict) -> dict:
         """Generate one ad from a brief. Brief keys: audience, product, goal, tone."""
@@ -61,7 +60,7 @@ class AdGenerator:
         def _call():
             return self._model.generate_content(
                 [AD_GENERATION_SYSTEM, user],
-                generation_config=self._generation_config or None,
+                generation_config=self._generation_config,
             )
 
         response = with_retry(_call)
@@ -84,7 +83,7 @@ class AdGenerator:
         def _call():
             return self._model.generate_content(
                 [AD_GENERATION_SYSTEM, user],
-                generation_config=self._generation_config or None,
+                generation_config=self._generation_config,
             )
 
         response = with_retry(_call)

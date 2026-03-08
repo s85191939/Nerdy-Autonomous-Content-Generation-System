@@ -72,7 +72,8 @@ class Evaluator:
     def __init__(self, model=None, seed: Optional[int] = None):
         self._model = model or _get_model()
         self._seed = seed
-        self._config = {"random_seed": seed} if seed is not None else {}
+        # GenerationConfig does not support random_seed in current Gemini SDK
+        self._config = None
 
     def evaluate(self, ad: dict) -> dict:
         """Return dimension scores with rationales, overall_score, and confidence."""
@@ -82,7 +83,7 @@ class Evaluator:
         def _call():
             return self._model.generate_content(
                 [EVALUATION_SYSTEM, user],
-                generation_config=self._config or None,
+                generation_config=self._config,
             )
 
         response = with_retry(_call)

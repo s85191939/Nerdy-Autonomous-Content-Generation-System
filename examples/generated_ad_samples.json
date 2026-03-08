@@ -1,0 +1,77 @@
+[
+  {
+    "id": "ad_0",
+    "brief": {
+      "audience": "Parents of high school juniors",
+      "product": "SAT tutoring program",
+      "goal": "conversion",
+      "tone": "reassuring, results-focused"
+    },
+    "ad_copy": {
+      "primary_text": "Is your child's SAT score holding them back? Our 1-on-1 tutors help students raise scores by 200+ points on average. Start with a free practice test — no commitment.",
+      "headline": "Raise Your SAT Score 200+ Points",
+      "description": "Varsity Tutors. Live, personalized SAT prep.",
+      "cta": "Start your free practice test"
+    },
+    "scores": {
+      "clarity": 8,
+      "value_proposition": 8,
+      "cta": 9,
+      "brand_voice": 8,
+      "emotional_resonance": 7
+    },
+    "overall_score": 8.0,
+    "iteration_count": 1,
+    "accepted": true
+  },
+  {
+    "id": "ad_1",
+    "brief": {
+      "audience": "High school students stressed about SAT",
+      "product": "SAT practice tests",
+      "goal": "awareness",
+      "tone": "empowering, direct"
+    },
+    "ad_copy": {
+      "primary_text": "The SAT doesn't have to own your stress. Get a free diagnostic, see where you stand, and build a plan with a tutor who gets it.",
+      "headline": "Free SAT Diagnostic — Know Where You Stand",
+      "description": "Personalized prep. Real results.",
+      "cta": "Learn More"
+    },
+    "scores": {
+      "clarity": 8,
+      "value_proposition": 7,
+      "cta": 8,
+      "brand_voice": 8,
+      "emotional_resonance": 8
+    },
+    "overall_score": 7.8,
+    "iteration_count": 2,
+    "accepted": true
+  },
+  {
+    "id": "ad_2",
+    "brief": {
+      "audience": "Families comparing prep options",
+      "product": "Live 1-on-1 tutoring",
+      "goal": "conversion",
+      "tone": "knowledgeable, approachable"
+    },
+    "ad_copy": {
+      "primary_text": "Why do families choose Varsity Tutors? Live 1-on-1 sessions, expert tutors, and score improvements that speak for themselves. Try a session risk-free.",
+      "headline": "1-on-1 SAT Prep That Actually Works",
+      "description": "Expert tutors. Flexible scheduling.",
+      "cta": "Get Started"
+    },
+    "scores": {
+      "clarity": 8,
+      "value_proposition": 8,
+      "cta": 8,
+      "brand_voice": 9,
+      "emotional_resonance": 7
+    },
+    "overall_score": 8.0,
+    "iteration_count": 1,
+    "accepted": true
+  }
+]

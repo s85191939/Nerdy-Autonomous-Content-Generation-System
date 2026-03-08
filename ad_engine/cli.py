@@ -16,10 +16,15 @@ from ad_engine.output.visualization import plot_iteration_quality
 from ad_engine.config import QUALITY_THRESHOLD, MAX_ITERATIONS
 
 
-def run_cmd(args) -> None:
-    num_ads = max(1, args.num_ads)
-    seed = args.seed
-    out_dir = Path(args.output_dir)
+def run_pipeline(
+    num_ads: int,
+    max_iterations: int,
+    output_dir: str,
+    seed: int = 42,
+    progress_callback=None,
+):
+    """Run the full generate→evaluate→iterate pipeline. Optional progress_callback(current, total, message)."""
+    out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     generator = AdGenerator(seed=seed)
@@ -28,7 +33,7 @@ def run_cmd(args) -> None:
         generator=generator,
         evaluator=evaluator,
         quality_threshold=QUALITY_THRESHOLD,
-        max_iterations=args.max_iterations,
+        max_iterations=max_iterations,
     )
     library = AdLibrary(base_path=out_dir)
     metrics = PerformanceMetrics()
@@ -36,7 +41,9 @@ def run_cmd(args) -> None:
     briefs = get_briefs_for_count(num_ads, seed=seed)
     results = []
     for i, brief in enumerate(briefs):
-        if (i + 1) % 10 == 0 or i == 0:
+        if progress_callback:
+            progress_callback(i + 1, num_ads, f"Processing ad {i + 1}/{num_ads} ...")
+        elif (i + 1) % 10 == 0 or i == 0:
             print(f"Processing ad {i + 1}/{num_ads} ...", file=sys.stderr)
         result = engine.run_for_brief(brief)
         results.append(result)
@@ -82,14 +89,31 @@ def run_cmd(args) -> None:
     metrics.record_run(cycle=1, avg_score=avg_score, token_cost=0.0, num_ads=len(results))
     library.save(prefix="ad_library")
 
-    # Write dataset, report, summary, and chart
     export_ads_dataset(export_ads, out_dir / "ads_dataset.json")
     export_evaluation_report(export_ads, out_dir / "evaluation_report.csv")
     export_evaluation_summary(export_ads, out_dir / "evaluation_summary.txt", quality_threshold=QUALITY_THRESHOLD)
     plot_iteration_quality(metrics.runs, out_dir / "iteration_quality_chart.png")
 
     accepted_count = sum(1 for r in results if r["accepted"])
-    print(f"Done. Generated {num_ads} ads. Accepted (>= {QUALITY_THRESHOLD}): {accepted_count}. Output: {out_dir}", file=sys.stderr)
+    return {
+        "num_ads": num_ads,
+        "accepted": accepted_count,
+        "avg_score": round(avg_score, 2),
+        "output_dir": str(out_dir),
+    }
+
+
+def run_cmd(args) -> None:
+    result = run_pipeline(
+        num_ads=max(1, args.num_ads),
+        max_iterations=args.max_iterations,
+        output_dir=args.output_dir,
+        seed=args.seed,
+    )
+    print(
+        f"Done. Generated {result['num_ads']} ads. Accepted (>= {QUALITY_THRESHOLD}): {result['accepted']}. Output: {result['output_dir']}",
+        file=sys.stderr,
+    )
 
 
 def export_cmd(args) -> None:
