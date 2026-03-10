@@ -20,6 +20,7 @@ An autonomous pipeline that generates Facebook and Instagram ad copy for Varsity
 - **Targeted regeneration** instead of full ad rewrite: we pass the weak dimension and its rationale into an improvement prompt so the model amends the ad rather than starting from scratch, reducing token use and preserving strong elements.
 - **Failure handling:** Retries with exponential backoff on API calls; a hard cap on iterations per ad to avoid infinite loops; calibration script to run the evaluator on reference ads (good/bad) before scaling.
 - **Reproducibility:** All runs are seeded (brief order, model generation) so results are reproducible for comparison and debugging.
+- **Run locally:** API keys are used for Gemini/OpenRouter/OpenAI; no deployment. Generated ad copy contains no real PII. Rate limits are handled by retries with exponential backoff (`ad_engine.utils.with_retry`); for very large batches, consider throttling. Cost is estimated per run and reported in `run_history.json` and the web Dashboard.
 
 ## Deliverables Met
 
@@ -29,9 +30,9 @@ An autonomous pipeline that generates Facebook and Instagram ad copy for Varsity
 | Evaluation framework (5 dimensions) | Yes — LLM-as-judge with rationales and confidence |
 | Quality feedback loop | Yes — weakest-dimension targeting, configurable max iterations |
 | 50+ ads with evaluation scores | Yes — `python -m ad_engine.cli run --num-ads 50` |
-| Decision log | Yes — `docs/DECISION_LOG.md` |
+| Decision log | Yes — [DECISION_LOG.md](DECISION_LOG.md) |
 | Evaluation report (JSON/CSV + trends) | Yes — `evaluation_report.csv`, `ads_dataset.json`, `evaluation_summary.txt`, quality chart |
-| Code quality | 37 tests, one-command setup, modular layout, explicit limitations in decision log |
+| Code quality | 80+ tests, one-command setup, modular layout, explicit limitations in decision log |
 
 ## How to Run
 
@@ -46,11 +47,10 @@ Calibrate the evaluator on reference ads before a full run: `python scripts/cali
 
 ## Quality improvement metrics and visualizations
 
-We track: **per-ad scores** (overall + 5 dimensions) in `evaluation_report.csv` and `ads_dataset.json`; **iteration history** per ad with `targeted_dimension` in `ads_dataset.json`; **run summary** in `evaluation_summary.txt`; **quality trend** chart in `output/iteration_quality_chart.png`; **ROI** (accepted per 1K tokens, cost) in `run_history.json` and the web Dashboard. After any run, see `output/` for these files.
+We track: **per-ad scores** (overall + 5 dimensions) in `evaluation_report.csv` and `ads_dataset.json`; **iteration history** per ad with `targeted_dimension` in `ads_dataset.json`; **run summary** in `evaluation_summary.txt`; **quality trend** chart in `output/iteration_quality_chart.png`; **ROI** (accepted per 1K tokens, cost) in `run_history.json` and the web Dashboard. After any run, see `output/` for these files. See [QUALITY_IMPROVEMENT_METRICS.md](QUALITY_IMPROVEMENT_METRICS.md) for details.
 
 ## References
 
-- **System design:** `docs/SYSTEM_DESIGN.md`
-- **Decision log:** `docs/DECISION_LOG.md`
-- **AI tools and prompts:** `docs/AI_TOOLS_AND_PROMPTS.md`
-- **Generated samples:** `examples/generated_ad_samples.json`
+- [DECISION_LOG.md](DECISION_LOG.md)
+- [AI_TOOLS_AND_PROMPTS.md](AI_TOOLS_AND_PROMPTS.md)
+- [generated_ad_samples.json](generated_ad_samples.json)

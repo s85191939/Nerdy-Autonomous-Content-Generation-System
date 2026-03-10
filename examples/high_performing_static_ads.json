@@ -1,0 +1,59 @@
+[
+  {
+    "id": "high_performing_1",
+    "expected_tier": "good",
+    "source": "Project 2: Ad Generator — highest performing static ads (this year)",
+    "creative_angle": "Bullet/checkmark format: specificity (date, weeks, sessions, points), urgent CTA",
+    "ad_copy": {
+      "primary_text": "May 2nd SAT. 8 weeks away. 2 sessions a week. 16 sessions total. That is about 200+ points. Start this week.",
+      "headline": "200+ Points. Start This Week.",
+      "description": "Varsity Tutors. Live 1-on-1 SAT prep.",
+      "cta": "Start this week"
+    },
+    "brief": {
+      "audience": "Parents and students with SAT test date in sight",
+      "product": "SAT tutoring (sessions per week)",
+      "goal": "conversion",
+      "tone": "urgent, specific, actionable"
+    },
+    "notes": "Clean static: light purple gradient, checkmarks per line, CTA highlighted; specificity (date, 200+ points) drives performance."
+  },
+  {
+    "id": "high_performing_2",
+    "expected_tier": "good",
+    "source": "Project 2: Ad Generator — highest performing static ads (this year)",
+    "creative_angle": "Before/after score proof: 1170 → 1410, visual transformation",
+    "ad_copy": {
+      "primary_text": "1170 to 1410. Real results from 1-on-1 SAT prep. See what's possible for your child.",
+      "headline": "SAT TUTORING TO HELP YOUR CHILD GET THEIR SAT SCORE UP",
+      "description": "Varsity Tutors",
+      "cta": "Learn More"
+    },
+    "brief": {
+      "audience": "Parents of students preparing for SAT",
+      "product": "SAT tutoring / score improvement",
+      "goal": "conversion",
+      "tone": "results-focused, proof-driven"
+    },
+    "notes": "Visual: student with Before/After score reports; headline is benefit-driven; strong value proposition with specific numbers."
+  },
+  {
+    "id": "high_performing_3",
+    "expected_tier": "good",
+    "source": "Project 2: Ad Generator — highest performing static ads (this year)",
+    "creative_angle": "Problem hook: GPA vs SAT disconnect, emotional contrast (split-screen)",
+    "ad_copy": {
+      "primary_text": "3.8 GPA But 1180 SAT? You're not alone. Bridge the gap with targeted prep.",
+      "headline": "3.8 GPA But 1180 SAT?",
+      "description": "Varsity Tutors. We help high achievers show it on test day.",
+      "cta": "Learn More"
+    },
+    "brief": {
+      "audience": "High-achieving students (and parents) who excel in class but underperform on SAT",
+      "product": "SAT prep to close the GPA–SAT gap",
+      "goal": "awareness / conversion",
+      "tone": "empathetic, problem-aware"
+    },
+    "notes": "Question hook; split visual (success vs struggle); speaks to specific pain point for calibration/evaluator."
+  }
+]

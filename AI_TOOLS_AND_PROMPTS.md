@@ -11,7 +11,19 @@ Submission requirement: document AI tools and prompts used.
 - **Generation:** One API call per ad (or per improvement step). Input: system prompt (brand + format) + user message (brief or improvement instruction). Output: JSON with `primary_text`, `headline`, `description`, `cta`.
 - **Evaluation:** One API call per ad. Input: system prompt (rubrics + confidence) + user message (ad JSON). Output: JSON with per-dimension `score`, `rationale`, `confidence`.
 
-No other AI tools (e.g. OpenAI, Claude) are used in the default pipeline unless configured; the design allows swapping in a different model for the evaluator (see DECISION_LOG §2).
+No other AI tools (e.g. OpenAI, Claude) are used in the default pipeline unless configured; the design allows swapping in a different model for the evaluator (see [DECISION_LOG.md](DECISION_LOG.md) §2).
+
+## Multi-model orchestration (v2)
+
+When multiple backends are configured, the pipeline uses a **fallback chain** with a clear rationale:
+
+| Priority | Model / backend | Role | Rationale |
+|----------|------------------|------|-----------|
+| 1 | **Gemini** (gemini-2.0-flash) | Ad copy generation and LLM-as-judge evaluation | Strong creative writing, good at brand voice; recommended in spec. |
+| 2 | **OpenRouter** (e.g. openrouter/free) | Same (generation + evaluation) | Free tier; keeps pipeline working if Gemini is unavailable. |
+| 3 | **OpenAI** (e.g. gpt-4o-mini) | Same | Fallback when neither Gemini nor OpenRouter is configured. |
+
+Image generation (v2) uses **Imagen** (google-genai, `imagen-3.0-generate-001`) when available; no fallback to other image models. Visual evaluation uses the same LLM as copy (Gemini/OpenRouter/OpenAI) for text-based scoring of brand consistency and engagement potential.
 
 ## Prompts
 
@@ -42,7 +54,7 @@ No other AI tools (e.g. OpenAI, Claude) are used in the default pipeline unless 
 **Template:**  
 `Previous ad:\n{ad_json}\n\nEvaluation: The ad scored below 7.0. Weakest dimension: {weak_dimension}.\nRationale: {rationale}\n\nImprove the ad specifically to strengthen {weak_dimension}. Keep primary_text, headline, description, and cta. Return only the improved ad as a single JSON object with keys: primary_text, headline, description, cta.`
 
-**Purpose:** After evaluation, if score < 7.0, we pass the ad, the weakest dimension name, and the evaluator’s rationale so the model amends the ad instead of rewriting from scratch.
+**Purpose:** After evaluation, if score < 7.0, we pass the ad, the weakest dimension name, and the evaluator's rationale so the model amends the ad instead of rewriting from scratch.
 
 ### 4. Evaluation (system)
 
@@ -51,7 +63,7 @@ No other AI tools (e.g. OpenAI, Claude) are used in the default pipeline unless 
 **Purpose:** Define the evaluator role and the five dimensions (1–10 scale), plus confidence (1–10). Require a single JSON object with keys `clarity`, `value_proposition`, `cta`, `brand_voice`, `emotional_resonance`; each value is `{ "score", "rationale", "confidence" }`.
 
 **Dimensions (abbreviated):**
-- clarity — understandable in &lt;3 seconds  
+- clarity — understandable in <3 seconds  
 - value_proposition — specific, compelling benefit  
 - cta — clear, compelling next step  
 - brand_voice — Varsity Tutors: empowering, knowledgeable, approachable  
@@ -69,9 +81,9 @@ No other AI tools (e.g. OpenAI, Claude) are used in the default pipeline unless 
 **Location:** `ad_engine/iterate/improvement_strategies.py` — `IMPROVEMENT_STRATEGIES`
 
 When the evaluator does not return a usable rationale for the weak dimension, we pass a short hint per dimension, e.g.:
-- clarity: single clear takeaway, understandable in &lt;3 seconds  
+- clarity: single clear takeaway, understandable in <3 seconds  
 - value_proposition: specific outcome (score improvement, time saved)  
-- cta: specific, low-friction (e.g. “Start your free practice test”)  
+- cta: specific, low-friction (e.g. "Start your free practice test")  
 - brand_voice: Varsity Tutors tone  
 - emotional_resonance: parent worry, student ambition, test anxiety  
 

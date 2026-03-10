@@ -21,6 +21,14 @@
       "emotional_resonance": 7
     },
     "overall_score": 8.0,
+    "confidence": 8.0,
+    "dimensions": {
+      "clarity": {"score": 8, "rationale": "Clear hook and single takeaway.", "confidence": 9},
+      "value_proposition": {"score": 8, "rationale": "Specific benefit (200+ points).", "confidence": 8},
+      "cta": {"score": 9, "rationale": "Low-friction, specific CTA.", "confidence": 9},
+      "brand_voice": {"score": 8, "rationale": "Empowering, results-focused.", "confidence": 8},
+      "emotional_resonance": {"score": 7, "rationale": "Taps into parent concern; could deepen.", "confidence": 7}
+    },
     "iteration_count": 1,
     "accepted": true
   },

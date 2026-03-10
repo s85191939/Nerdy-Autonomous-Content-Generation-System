@@ -62,7 +62,7 @@ def _parse_evaluation(text: str) -> dict:
     raise ValueError("No JSON found in evaluation response")
 
 
-def default_evaluation(overall_score: float = 5.0) -> dict:
+def default_evaluation(overall_score: float = 5.0, dimension_weights: Optional[dict] = None) -> dict:
     """Return a valid evaluation dict when LLM evaluation fails. Never raises."""
     score_per_dim = max(1, min(10, int(round(overall_score))))
     dimensions = {}
@@ -76,7 +76,7 @@ def default_evaluation(overall_score: float = 5.0) -> dict:
     return {
         "dimensions": dimensions,
         "scores": scores_only,
-        "overall_score": round(aggregate_scores(scores_only), 2),
+        "overall_score": round(aggregate_scores(scores_only, dimension_weights), 2),
         "confidence": 5.0,
     }
 
@@ -84,10 +84,11 @@ def default_evaluation(overall_score: float = 5.0) -> dict:
 class Evaluator:
     """Score ads on five dimensions using LLM-as-judge."""
 
-    def __init__(self, model=None, seed: Optional[int] = None, token_tracker=None):
+    def __init__(self, model=None, seed: Optional[int] = None, token_tracker=None, dimension_weights: Optional[dict] = None):
         self._model = model or _get_model()
         self._seed = seed
         self._token_tracker = token_tracker
+        self._dimension_weights = dimension_weights
         # GenerationConfig does not support random_seed in current Gemini SDK
         self._config = None
 
@@ -97,7 +98,7 @@ class Evaluator:
             return self._evaluate_impl(ad)
         except Exception as e:
             logger.warning("Evaluation failed, using default evaluation: %s", e)
-            return default_evaluation(5.0)
+            return default_evaluation(5.0, self._dimension_weights)
 
     def _evaluate_impl(self, ad: dict) -> dict:
         """Internal evaluate; may raise."""
@@ -116,7 +117,7 @@ class Evaluator:
         text = response.text if hasattr(response, "text") else str(response)
         dim_results = _parse_evaluation(text)
         scores_only = {d: dim_results[d]["score"] for d in DIMENSION_NAMES}
-        overall = aggregate_scores(scores_only)
+        overall = aggregate_scores(scores_only, self._dimension_weights)
         return {
             "dimensions": dim_results,
             "scores": scores_only,

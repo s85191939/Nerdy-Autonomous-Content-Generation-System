@@ -35,13 +35,14 @@ class IterationEngine:
     def run_for_brief(
         self,
         brief: dict,
+        creative_angle: str = None,
     ) -> dict:
         """
         Generate ad for brief, evaluate, and iterate until score >= threshold or max_iterations.
         Returns dict with ad, evaluation, iteration_count, accepted. Never raises; on failure returns fallback result.
         """
         try:
-            return self._run_for_brief_impl(brief)
+            return self._run_for_brief_impl(brief, creative_angle)
         except Exception as e:
             logger.warning("run_for_brief failed for brief, returning fallback result: %s", e)
             fallback_eval = default_evaluation(5.0)
@@ -56,9 +57,9 @@ class IterationEngine:
                 ],
             }
 
-    def _run_for_brief_impl(self, brief: dict) -> dict:
+    def _run_for_brief_impl(self, brief: dict, creative_angle: str = None) -> dict:
         """Internal run; may raise."""
-        ad = self.generator.generate(brief)
+        ad = self.generator.generate(brief, creative_angle=creative_angle)
         evaluation = self.evaluator.evaluate(ad)
         iteration_count = 1
         history = [{"iteration": 1, "ad": ad, "evaluation": evaluation}]
@@ -75,6 +76,63 @@ class IterationEngine:
         return {
             "brief": brief,
             "ad": ad,
+            "evaluation": evaluation,
+            "iteration_count": iteration_count,
+            "accepted": accepted,
+            "history": history,
+        }
+
+    def run_from_ad(self, ad: dict, brief: dict) -> dict:
+        """Re-evaluate and iterate on an existing ad. Use to run another improvement round on a campaign ad."""
+        try:
+            return self._run_from_ad_impl(ad, brief)
+        except Exception as e:
+            logger.warning("run_from_ad failed: %s", e)
+            fallback_eval = default_evaluation(5.0)
+            return {
+                "brief": brief,
+                "ad": dict(ad) if ad else dict(FALLBACK_AD),
+                "evaluation": fallback_eval,
+                "iteration_count": 0,
+                "accepted": False,
+                "history": [{"iteration": 1, "ad": ad or FALLBACK_AD, "evaluation": fallback_eval}],
+            }
+
+    def run_one_improvement(self, ad: dict, brief: dict) -> dict:
+        """Run exactly one improve step on an existing ad (for UI 'Make it better' button). Returns result with updated ad and history."""
+        evaluation = self.evaluator.evaluate(ad)
+        weak = _weakest_dimension(evaluation["scores"])
+        rationale = evaluation["dimensions"][weak].get("rationale", "") or get_improvement_hint(weak)
+        new_ad = self.generator.improve(dict(ad), weak, rationale)
+        new_eval = self.evaluator.evaluate(new_ad)
+        return {
+            "brief": brief,
+            "ad": new_ad,
+            "evaluation": new_eval,
+            "iteration_count": 2,  # original + 1 improve
+            "accepted": new_eval["overall_score"] >= self.quality_threshold,
+            "history": [
+                {"iteration": 1, "ad": dict(ad), "evaluation": evaluation},
+                {"iteration": 2, "ad": dict(new_ad), "evaluation": new_eval},
+            ],
+        }
+
+    def _run_from_ad_impl(self, ad: dict, brief: dict) -> dict:
+        evaluation = self.evaluator.evaluate(ad)
+        iteration_count = 1
+        history = [{"iteration": 1, "ad": dict(ad), "evaluation": evaluation}]
+        current_ad = dict(ad)
+        while evaluation["overall_score"] < self.quality_threshold and iteration_count < self.max_iterations:
+            weak = _weakest_dimension(evaluation["scores"])
+            rationale = evaluation["dimensions"][weak].get("rationale", "") or get_improvement_hint(weak)
+            current_ad = self.generator.improve(current_ad, weak, rationale)
+            evaluation = self.evaluator.evaluate(current_ad)
+            iteration_count += 1
+            history.append({"iteration": iteration_count, "ad": dict(current_ad), "evaluation": evaluation})
+        accepted = evaluation["overall_score"] >= self.quality_threshold
+        return {
+            "brief": brief,
+            "ad": current_ad,
             "evaluation": evaluation,
             "iteration_count": iteration_count,
             "accepted": accepted,

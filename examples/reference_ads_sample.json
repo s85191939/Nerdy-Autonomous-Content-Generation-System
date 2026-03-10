@@ -18,5 +18,35 @@
       "description": "Contact us.",
       "cta": "Learn More"
     }
+  },
+  {
+    "id": "high_performing_1",
+    "expected_tier": "good",
+    "ad_copy": {
+      "primary_text": "May 2nd SAT. 8 weeks away. 2 sessions a week. 16 sessions total. That is about 200+ points. Start this week.",
+      "headline": "200+ Points. Start This Week.",
+      "description": "Varsity Tutors. Live 1-on-1 SAT prep.",
+      "cta": "Start this week"
+    }
+  },
+  {
+    "id": "high_performing_2",
+    "expected_tier": "good",
+    "ad_copy": {
+      "primary_text": "1170 to 1410. Real results from 1-on-1 SAT prep. See what's possible for your child.",
+      "headline": "SAT TUTORING TO HELP YOUR CHILD GET THEIR SAT SCORE UP",
+      "description": "Varsity Tutors",
+      "cta": "Learn More"
+    }
+  },
+  {
+    "id": "high_performing_3",
+    "expected_tier": "good",
+    "ad_copy": {
+      "primary_text": "3.8 GPA But 1180 SAT? You're not alone. Bridge the gap with targeted prep.",
+      "headline": "3.8 GPA But 1180 SAT?",
+      "description": "Varsity Tutors. We help high achievers show it on test day.",
+      "cta": "Learn More"
+    }
   }
 ]

@@ -1,24 +1,27 @@
 """Web interface for Nerdy Autonomous Ad Engine."""
 
 import os
+import sys
 import threading
 from pathlib import Path
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template_string, request, send_from_directory
+import csv
+import json as _json
+from flask import Flask, jsonify, render_template_string, request, send_file, send_from_directory
 
 # Load .env from project root so OPENROUTER_API_KEY etc. are available
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 # Add project root for ad_engine imports
 ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in os.sys.path:
-    os.sys.path.insert(0, str(ROOT))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-from ad_engine.cli import run_pipeline
+from ad_engine.cli import run_pipeline, improve_single_ad
 
 app = Flask(__name__, static_folder=None)
-app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
+app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10 MB
 
 # Shared run state (single run at a time)
 _run_state = {
@@ -59,7 +62,27 @@ def api_run():
     num_ads = min(max(1, int(data.get("num_ads", 5))), 100)
     max_iterations = min(max(1, int(data.get("max_iterations", 6))), 10)
     seed = int(data.get("seed", 42))
+    num_variants = min(max(1, int(data.get("num_variants", 1))), 5)
+    enable_image_gen = bool(data.get("enable_image_gen"))
+    concurrency = min(max(1, int(data.get("concurrency", 1))), 8)
+    quality_threshold = data.get("quality_threshold")
+    if quality_threshold is not None:
+        try:
+            quality_threshold = float(quality_threshold)
+        except (TypeError, ValueError):
+            quality_threshold = None
+    dimension_weights = data.get("dimension_weights")
+    if dimension_weights is not None and not isinstance(dimension_weights, dict):
+        dimension_weights = None
     output_dir = str(ROOT / "output")
+    custom_brief = None
+    if any(data.get(k) for k in ("audience", "product", "goal", "tone")):
+        custom_brief = {
+            "audience": (data.get("audience") or "").strip() or "Parents of high school students",
+            "product": (data.get("product") or "").strip() or "SAT tutoring program",
+            "goal": (data.get("goal") or "").strip() or "conversion",
+            "tone": (data.get("tone") or "").strip() or "reassuring, results-focused",
+        }
 
     # Optional: set API keys from request (not persisted; used only for this process)
     api_key = (data.get("api_key") or "").strip()
@@ -76,7 +99,7 @@ def api_run():
     _run_state.update(
         status="running",
         current=0,
-        total=num_ads,
+        total=num_ads * num_variants,
         message="Starting...",
         result=None,
         error=None,
@@ -92,9 +115,15 @@ def api_run():
                 output_dir=output_dir,
                 seed=seed,
                 progress_callback=_progress_callback,
+                custom_brief=custom_brief,
+                quality_threshold=quality_threshold,
+                dimension_weights=dimension_weights,
+                num_variants=num_variants,
+                enable_image_gen=enable_image_gen,
+                concurrency=concurrency,
             )
             _run_state["status"] = "done"
-            _run_state["current"] = num_ads
+            _run_state["current"] = num_ads * num_variants
             _run_state["message"] = "Done."
             _run_state["result"] = result
         except Exception as e:
@@ -111,27 +140,177 @@ def api_run():
 def api_outputs():
     out = ROOT / "output"
     if not out.exists():
-        return jsonify({"files": []})
+        return jsonify({"files": [], "run_id": None, "run_timestamp": None})
     files = []
     for name in ["ads_dataset.json", "evaluation_report.csv", "evaluation_summary.txt", "iteration_quality_chart.png"]:
         p = out / name
         if p.exists():
-            files.append({"name": name, "size": p.stat().st_size})
-    return jsonify({"files": files})
+            files.append({
+                "name": name,
+                "size": p.stat().st_size,
+                "description": _OUTPUT_DESCRIPTIONS.get(name, ""),
+            })
+    run_id = None
+    run_timestamp = None
+    try:
+        hist_path = out / "run_history.json"
+        if hist_path.exists():
+            with open(hist_path) as f:
+                history = _json.load(f)
+            if isinstance(history, list) and history:
+                last = history[-1]
+                run_id = last.get("run_id")
+                run_timestamp = last.get("timestamp")
+    except Exception:
+        pass
+    return jsonify({"files": files, "run_id": run_id, "run_timestamp": run_timestamp})
 
 
 @app.route("/api/output/<path:name>")
 def api_output_file(name):
     if name not in ("ads_dataset.json", "evaluation_report.csv", "evaluation_summary.txt", "iteration_quality_chart.png"):
         return "Forbidden", 403
+    inline = request.args.get("inline", "").lower() in ("1", "true", "yes")
+    path = ROOT / "output" / name
+    if not path.exists():
+        return "Not found", 404
+    if name == "iteration_quality_chart.png" and inline:
+        return send_file(path, mimetype="image/png", as_attachment=False)
     return send_from_directory(ROOT / "output", name, as_attachment=True)
+
+
+@app.route("/api/creatives/<path:filename>")
+def api_creative_image(filename):
+    """Serve a generated ad image from output/creatives/ (v2 image gen)."""
+    if ".." in filename or filename.startswith("/"):
+        return "Forbidden", 403
+    path = ROOT / "output" / "creatives" / filename
+    if not path.exists() or not path.is_file():
+        return "Not found", 404
+    return send_file(path, mimetype="image/png", as_attachment=False)
+
+
+# --- Result data for in-UI display (so users see what they're downloading) ---
+
+_OUTPUT_DESCRIPTIONS = {
+    "ads_dataset.json": "Full ad copy, per-dimension scores, and iteration history for each ad (JSON).",
+    "evaluation_report.csv": "Per-ad scores table: ad_id, overall_score, iteration_count, and all 5 dimensions (CSV).",
+    "evaluation_summary.txt": "Run summary: total ads, accepted count, average score, quality trend note (text).",
+    "iteration_quality_chart.png": "Quality trend chart: average score over run cycles (PNG).",
+}
+_ALLOWED_RUN_OUTPUT_NAMES = ("ads_dataset.json", "evaluation_report.csv", "evaluation_summary.txt", "iteration_quality_chart.png")
+
+
+@app.route("/api/result/ads_dataset")
+def api_result_ads_dataset():
+    """Return last run's ads_dataset.json for in-UI display (full copy, scores, iteration history)."""
+    path = ROOT / "output" / "ads_dataset.json"
+    if not path.exists():
+        return jsonify([])
+    try:
+        with open(path) as f:
+            data = _json.load(f)
+        return jsonify(data if isinstance(data, list) else [])
+    except Exception:
+        return jsonify([])
+
+
+@app.route("/api/result/summary")
+def api_result_summary():
+    """Return last run's evaluation_summary.txt for in-UI display."""
+    path = ROOT / "output" / "evaluation_summary.txt"
+    if not path.exists():
+        return "", 404
+    try:
+        return path.read_text()
+    except Exception:
+        return "", 404
+
+
+@app.route("/api/result/chart")
+def api_result_chart():
+    """Serve quality chart image for inline display (not as download)."""
+    path = ROOT / "output" / "iteration_quality_chart.png"
+    if not path.exists():
+        return "", 404
+    return send_file(path, mimetype="image/png", as_attachment=False)
+
+
+@app.route("/api/result/evaluation_report")
+def api_result_evaluation_report():
+    """Return last run's evaluation_report.csv as JSON for in-UI table."""
+    path = ROOT / "output" / "evaluation_report.csv"
+    if not path.exists():
+        return jsonify([])
+    try:
+        with open(path, newline="") as f:
+            rows = list(csv.DictReader(f))
+        return jsonify(rows)
+    except Exception:
+        return jsonify([])
+
+
+@app.route("/api/improve_ad", methods=["POST"])
+def api_improve_ad():
+    """Run one improvement step on a single ad (from last run's output). Body: { ad_id }."""
+    if _run_state["status"] == "running":
+        return jsonify({"ok": False, "error": "A run is in progress"}), 409
+    data = request.get_json(force=True, silent=True) or {}
+    ad_id = (data.get("ad_id") or "").strip()
+    if not ad_id or ".." in ad_id or "/" in ad_id:
+        return jsonify({"ok": False, "error": "Invalid ad_id"}), 400
+    updated = improve_single_ad(ad_id, str(ROOT / "output"))
+    if updated is None:
+        return jsonify({"ok": False, "error": "Ad not found or no run output"}), 404
+    return jsonify({"ok": True, "ad": updated})
 
 
 @app.route("/api/run_history")
 def api_run_history():
-    """Return run history for ROI dashboard."""
+    """Return run history for dashboard. Ensures each run has run_id; merges campaign names."""
     import json
     path = ROOT / "output" / "run_history.json"
+    if not path.exists():
+        return jsonify([])
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        if not isinstance(data, list):
+            return jsonify([])
+        names_path = ROOT / "output" / "campaign_names.json"
+        names = {}
+        if names_path.exists():
+            try:
+                with open(names_path) as nf:
+                    names = json.load(nf)
+            except Exception:
+                pass
+        for r in data:
+            if not r.get("run_id") and r.get("timestamp"):
+                ts = r["timestamp"].replace("-", "").replace(":", "").replace("Z", "").replace(".", "")[:15]
+                r["run_id"] = ts
+            r["name"] = names.get(r.get("run_id") or "", "").strip() or None
+            run_id = r.get("run_id")
+            r["outputs"] = []
+            if run_id and ".." not in run_id and "/" not in run_id:
+                run_dir = ROOT / "output" / "runs" / run_id
+                if run_dir.exists() and run_dir.is_dir():
+                    for name in _ALLOWED_RUN_OUTPUT_NAMES:
+                        p = run_dir / name
+                        if p.exists():
+                            r["outputs"].append({"name": name, "size": p.stat().st_size})
+        return jsonify(data)
+    except Exception:
+        return jsonify([])
+
+
+@app.route("/api/runs/<run_id>/ads")
+def api_run_ads(run_id):
+    """Return ads for a specific run (drill-down)."""
+    import json
+    if ".." in run_id or "/" in run_id:
+        return jsonify({"error": "Invalid run_id"}), 400
+    path = ROOT / "output" / "runs" / run_id / "ads_dataset.json"
     if not path.exists():
         return jsonify([])
     try:
@@ -140,6 +319,117 @@ def api_run_history():
         return jsonify(data if isinstance(data, list) else [])
     except Exception:
         return jsonify([])
+
+
+@app.route("/api/runs/<run_id>/outputs")
+def api_run_outputs(run_id):
+    """List output files for a specific run (for dashboard per-run downloads)."""
+    if ".." in run_id or "/" in run_id:
+        return jsonify({"files": []}), 400
+    run_dir = ROOT / "output" / "runs" / run_id
+    if not run_dir.exists() or not run_dir.is_dir():
+        return jsonify({"files": []})
+    files = []
+    for name in _ALLOWED_RUN_OUTPUT_NAMES:
+        p = run_dir / name
+        if p.exists():
+            files.append({"name": name, "size": p.stat().st_size, "description": _OUTPUT_DESCRIPTIONS.get(name, "")})
+    return jsonify({"files": files, "run_id": run_id})
+
+
+@app.route("/api/runs/<run_id>/output/<path:name>")
+def api_run_output_file(run_id, name):
+    """Download an output file from a specific run."""
+    if ".." in run_id or "/" in run_id or name not in _ALLOWED_RUN_OUTPUT_NAMES:
+        return "Forbidden", 403
+    path = ROOT / "output" / "runs" / run_id / name
+    if not path.exists():
+        return "Not found", 404
+    if name == "iteration_quality_chart.png" and request.args.get("inline", "").lower() in ("1", "true", "yes"):
+        return send_file(path, mimetype="image/png", as_attachment=False)
+    return send_file(path, as_attachment=True, download_name=name)
+
+
+@app.route("/api/campaign_name", methods=["POST"])
+def api_campaign_name():
+    """Set display name for a run. Body: { run_id, name }."""
+    import json
+    data = request.get_json(force=True, silent=True) or {}
+    run_id = (data.get("run_id") or "").strip()
+    name = (data.get("name") or "").strip()
+    if not run_id or ".." in run_id or "/" in run_id:
+        return jsonify({"ok": False, "error": "Invalid run_id"}), 400
+    path = ROOT / "output" / "campaign_names.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    names = {}
+    if path.exists():
+        try:
+            with open(path) as f:
+                names = json.load(f)
+        except Exception:
+            pass
+    names[run_id] = name
+    try:
+        with open(path, "w") as f:
+            json.dump(names, f, indent=2)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/iterate_campaign", methods=["POST"])
+def api_iterate_campaign():
+    global _run_state
+    if _run_state["status"] == "running":
+        return jsonify({"ok": False, "error": "A run is already in progress"}), 409
+    data = request.get_json(force=True, silent=True) or {}
+    run_id = (data.get("run_id") or "").strip()
+    max_extra = min(max(1, int(data.get("max_extra_iterations", 3))), 10)
+    if not run_id or ".." in run_id or "/" in run_id:
+        return jsonify({"ok": False, "error": "Invalid run_id"}), 400
+    from ad_engine.cli import iterate_campaign
+    _run_state.update(status="running", current=0, total=1, message="Re-iterating...", result=None, error=None, completed_ads=[])
+    def run():
+        global _run_state
+        try:
+            result = iterate_campaign(str(ROOT / "output"), run_id=run_id, max_extra_iterations=max_extra, progress_callback=_progress_callback)
+            _run_state["status"] = "done"
+            _run_state["result"] = result
+            _run_state["current"] = result.get("num_ads", 0)
+            _run_state["total"] = result.get("num_ads", 1)
+        except Exception as e:
+            _run_state["status"] = "error"
+            _run_state["error"] = str(e)
+    threading.Thread(target=run).start()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/competitor/insights")
+def api_competitor_insights():
+    from ad_engine.competitor.insights import load_insights
+    return jsonify(load_insights(ROOT / "output" / "competitor_insights.json"))
+
+
+@app.route("/api/competitor/extract", methods=["POST"])
+def api_competitor_extract():
+    data = request.get_json(force=True, silent=True) or {}
+    if not isinstance(data.get("ads"), list):
+        return jsonify({"ok": False, "error": "Send { ads: [...] }"}), 400
+    from ad_engine.competitor.insights import extract_patterns, save_insights
+    insights = extract_patterns(data["ads"])
+    save_insights(insights, ROOT / "output" / "competitor_insights.json")
+    return jsonify({"ok": True, "insights": insights})
+
+
+@app.route("/api/competitor/rewrite", methods=["POST"])
+def api_competitor_rewrite():
+    data = request.get_json(force=True, silent=True) or {}
+    ad = data.get("ad")
+    if not ad or not isinstance(ad, dict):
+        return jsonify({"ok": False, "error": "Send { ad: {...} }"}), 400
+    from ad_engine.competitor.insights import rewrite_as_brand
+    out = rewrite_as_brand(ad)
+    return jsonify({"ok": out is not None, "ad": out} if out else {"ok": False, "error": "Rewrite failed"})
 
 
 @app.route("/dashboard")
@@ -180,76 +470,167 @@ INDEX_HTML = """
 <body class="min-h-screen bg-surface-50 text-slate-800 font-sans antialiased">
   <!-- Header -->
   <header class="border-b border-slate-200/80 bg-white/90 backdrop-blur-sm sticky top-0 z-10">
-    <div class="max-w-4xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
       <div class="flex items-center gap-2">
-        <span class="text-2xl font-bold tracking-tight text-slate-900">Nerdy</span>
-        <span class="text-2xl font-semibold text-primary-600">Ad Engine</span>
+        <span class="text-xl font-bold tracking-tight text-slate-900">Nerdy</span>
+        <span class="text-xl font-semibold text-primary-600">Ad Engine</span>
+        <span class="hidden sm:inline-flex items-center rounded-full bg-primary-50 text-primary-700 text-xs font-medium px-2 py-0.5 ml-1">AI-Powered</span>
       </div>
-      <span class="text-sm text-slate-500 hidden sm:inline">Facebook &amp; Instagram</span>
-      <a href="/dashboard" class="text-sm font-medium text-primary-600 hover:text-primary-700">Dashboard</a>
+      <nav class="flex items-center gap-1">
+        <a href="/" class="px-3 py-1.5 text-sm font-medium rounded-lg bg-primary-50 text-primary-700">Generator</a>
+        <a href="/dashboard" class="px-3 py-1.5 text-sm font-medium rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-800 transition-colors">Campaigns</a>
+      </nav>
     </div>
   </header>
 
   <main class="max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
     <!-- Hero -->
-    <section class="text-center mb-10 sm:mb-12">
+    <section class="text-center mb-8 sm:mb-10">
       <h1 class="text-3xl sm:text-4xl font-bold text-slate-900 tracking-tight mb-3">Generate ad copy that performs</h1>
-      <p class="text-lg text-slate-600 max-w-xl mx-auto">Create and score Facebook &amp; Instagram ads with AI. We generate copy, evaluate it on clarity, value, and brand voice, then iterate until it hits your quality bar.</p>
+      <p class="text-base text-slate-500 max-w-lg mx-auto mb-4">AI-powered Facebook &amp; Instagram ad generation with LLM-as-judge evaluation. We generate, score, and iterate until every ad hits your quality bar.</p>
+      <div class="flex flex-wrap items-center justify-center gap-2 text-xs">
+        <span class="inline-flex items-center rounded-full bg-primary-50 text-primary-700 px-2.5 py-1 font-medium">LLM-as-Judge Eval</span>
+        <span class="inline-flex items-center rounded-full bg-blue-50 text-blue-700 px-2.5 py-1 font-medium">Auto-Iteration</span>
+        <span class="inline-flex items-center rounded-full bg-purple-50 text-purple-700 px-2.5 py-1 font-medium">Multi-Model</span>
+        <span class="inline-flex items-center rounded-full bg-amber-50 text-amber-700 px-2.5 py-1 font-medium">Quality Ratchet</span>
+        <span class="inline-flex items-center rounded-full bg-rose-50 text-rose-700 px-2.5 py-1 font-medium">Competitive Intel</span>
+      </div>
     </section>
 
     <!-- Generator card -->
     <section class="bg-white rounded-2xl shadow-sm border border-slate-200/80 overflow-hidden mb-6">
       <div class="px-6 py-5 border-b border-slate-100">
-        <h2 class="text-lg font-semibold text-slate-900">New run</h2>
-        <p class="text-sm text-slate-500 mt-0.5">Configure your batch and start generation. API key in <code class="text-xs bg-slate-100 px-1.5 py-0.5 rounded">.env</code> is used if left blank.</p>
+        <h2 class="text-lg font-semibold text-slate-900">Generate from a brief</h2>
+        <p class="text-sm text-slate-500 mt-0.5">Enter audience, product, and goal to generate ads. Leave blank to use example SAT/Varsity Tutors briefs.</p>
       </div>
       <form id="form" class="p-6 space-y-5">
-        <div>
-          <label for="api_key" class="block text-sm font-medium text-slate-700 mb-1.5">Gemini API key</label>
-          <input type="password" id="api_key" name="api_key" placeholder="Optional if set in .env" autocomplete="off"
-            class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
-        </div>
-        <div class="border-t border-slate-100 pt-4 mt-2">
-          <p class="text-sm font-medium text-slate-700 mb-2">Or use OpenRouter (free models)</p>
-          <p class="text-xs text-slate-500 mb-3">When Gemini quota is exceeded, use an <a href="https://openrouter.ai/keys" target="_blank" rel="noopener" class="text-primary-600 hover:underline">OpenRouter</a> key with free models. Key in <code class="text-xs bg-slate-100 px-1 rounded">.env</code> is used if left blank. If you get 401 Unauthorized, leave this blank to use the full key from .env.</p>
+        <div class="bg-slate-50 rounded-lg p-4 border border-slate-200">
+          <p class="text-sm font-semibold text-slate-800 mb-3">Brief (audience + product + goal)</p>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label for="openrouter_api_key" class="block text-sm font-medium text-slate-600 mb-1">OpenRouter API key</label>
-              <input type="text" id="openrouter_api_key" name="openrouter_api_key" placeholder="Paste key or leave blank to use .env" autocomplete="off"
-                class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm font-mono">
+              <label for="audience" class="block text-sm font-medium text-slate-700 mb-1">Audience</label>
+              <input type="text" id="audience" name="audience" placeholder="e.g. Parents of high school juniors"
+                class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
             </div>
             <div>
-              <label for="openrouter_model" class="block text-sm font-medium text-slate-600 mb-1">Model</label>
-              <input type="text" id="openrouter_model" name="openrouter_model" value="openrouter/free" placeholder="openrouter/free"
+              <label for="product" class="block text-sm font-medium text-slate-700 mb-1">Product / offer</label>
+              <input type="text" id="product" name="product" placeholder="e.g. SAT tutoring program"
+                class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
+            </div>
+            <div>
+              <label for="goal" class="block text-sm font-medium text-slate-700 mb-1">Goal</label>
+              <input type="text" id="goal" name="goal" placeholder="e.g. conversion or awareness"
+                class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
+            </div>
+            <div>
+              <label for="tone" class="block text-sm font-medium text-slate-700 mb-1">Tone (optional)</label>
+              <input type="text" id="tone" name="tone" placeholder="e.g. reassuring, results-focused"
                 class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
             </div>
           </div>
         </div>
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <!-- v2: Image generation toggle (visible) -->
+        <div class="flex items-center gap-3 rounded-lg bg-blue-50/70 border border-blue-100 p-3">
+          <input type="checkbox" id="enable_image_gen" name="enable_image_gen" value="1"
+            class="rounded border-slate-300 text-primary-600 focus:ring-primary-500 w-4 h-4">
           <div>
-            <label for="num_ads" class="block text-sm font-medium text-slate-700 mb-1.5">Number of ads</label>
-            <input type="number" id="num_ads" name="num_ads" value="5" min="1" max="100"
-              class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
-          </div>
-          <div>
-            <label for="max_iterations" class="block text-sm font-medium text-slate-700 mb-1.5">Max iterations per ad</label>
-            <input type="number" id="max_iterations" name="max_iterations" value="6" min="1" max="10"
-              class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
-          </div>
-          <div>
-            <label for="seed" class="block text-sm font-medium text-slate-700 mb-1.5">Random seed</label>
-            <input type="number" id="seed" name="seed" value="42"
-              class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
+            <span class="text-sm font-medium text-slate-700">Generate images for each ad</span>
+            <span class="ml-1.5 inline-flex items-center rounded-full bg-blue-100 text-blue-700 text-xs font-medium px-1.5 py-0.5">v2</span>
+            <p class="text-xs text-slate-500 mt-0.5">Uses Imagen to create ad creatives, scored for brand consistency &amp; engagement</p>
           </div>
         </div>
-        <div class="pt-1">
-          <button type="submit" id="runBtn"
-            class="inline-flex items-center justify-center gap-2 w-full sm:w-auto px-6 py-3 bg-primary-600 text-white font-semibold rounded-lg shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed transition-colors">
-            <svg id="runIcon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-            <span id="runLabel">Run generator</span>
-          </button>
+        <!-- Quick settings + Generate button -->
+        <div class="flex flex-col sm:flex-row gap-4 items-end">
+          <div class="flex-1 grid grid-cols-2 gap-4">
+            <div>
+              <label for="num_ads" class="block text-sm font-medium text-slate-700 mb-1.5">Number of ads</label>
+              <input type="number" id="num_ads" name="num_ads" value="5" min="1" max="100"
+                class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
+            </div>
+            <div>
+              <label for="quality_threshold" class="block text-sm font-medium text-slate-700 mb-1.5">Quality threshold</label>
+              <input type="number" id="quality_threshold" name="quality_threshold" step="0.1" min="1" max="10" placeholder="7.0"
+                class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
+            </div>
+          </div>
+          <div class="shrink-0 pb-px">
+            <button type="submit" id="runBtn"
+              class="inline-flex items-center justify-center gap-2 px-8 py-2.5 bg-primary-600 text-white font-semibold rounded-lg shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed transition-colors">
+              <svg id="runIcon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              <span id="runLabel">Generate ads</span>
+            </button>
+          </div>
         </div>
+        <!-- Advanced settings (collapsed by default) -->
+        <details class="border-t border-slate-100 pt-3">
+          <summary class="text-sm font-medium text-slate-500 cursor-pointer hover:text-slate-700 select-none flex items-center gap-1.5 py-1">
+            <svg class="w-4 h-4 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            Advanced settings
+          </summary>
+          <div class="mt-4 space-y-5">
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div>
+                <label for="max_iterations" class="block text-sm font-medium text-slate-700 mb-1.5">Max iterations</label>
+                <input type="number" id="max_iterations" name="max_iterations" value="6" min="1" max="10"
+                  class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
+              </div>
+              <div>
+                <label for="num_variants" class="block text-sm font-medium text-slate-700 mb-1.5">A/B variants</label>
+                <input type="number" id="num_variants" name="num_variants" value="1" min="1" max="5"
+                  class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
+              </div>
+              <div>
+                <label for="concurrency" class="block text-sm font-medium text-slate-700 mb-1.5">Parallel ads</label>
+                <input type="number" id="concurrency" name="concurrency" value="2" min="1" max="8"
+                  class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
+              </div>
+              <div>
+                <label for="seed" class="block text-sm font-medium text-slate-700 mb-1.5">Random seed</label>
+                <input type="number" id="seed" name="seed" value="42"
+                  class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
+              </div>
+            </div>
+            <div class="border-t border-slate-100 pt-4">
+              <p class="text-sm font-medium text-slate-700 mb-3">API configuration</p>
+              <p class="text-xs text-slate-500 mb-3">Keys from <code class="bg-slate-100 px-1 rounded">.env</code> are used when fields are left blank.</p>
+              <div class="space-y-3">
+                <div>
+                  <label for="api_key" class="block text-sm font-medium text-slate-600 mb-1">Gemini API key</label>
+                  <input type="password" id="api_key" name="api_key" placeholder="Optional — uses .env" autocomplete="off"
+                    class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label for="openrouter_api_key" class="block text-sm font-medium text-slate-600 mb-1">OpenRouter key</label>
+                    <input type="text" id="openrouter_api_key" name="openrouter_api_key" placeholder="Leave blank to use .env" autocomplete="off"
+                      class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm font-mono">
+                  </div>
+                  <div>
+                    <label for="openrouter_model" class="block text-sm font-medium text-slate-600 mb-1">Model</label>
+                    <input type="text" id="openrouter_model" name="openrouter_model" value="openrouter/free" placeholder="openrouter/free"
+                      class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </details>
       </form>
+    </section>
+
+    <section class="bg-white rounded-2xl shadow-sm border border-slate-200/80 overflow-hidden mb-6">
+      <details><summary class="px-6 py-4 cursor-pointer font-medium text-slate-800 border-b border-slate-100">Competitor ad study</summary>
+      <div class="p-6 text-sm">
+        <p class="text-slate-600 mb-3">Paste competitor ads (JSON array). Extract patterns; next run uses them.</p>
+        <textarea id="competitor_ads_json" rows="3" class="w-full rounded-lg border font-mono text-xs" placeholder='[{"primary_text":"...","headline":"...","cta":"..."}]'></textarea>
+        <button type="button" id="extractPatternsBtn" class="mt-2 px-3 py-1.5 bg-primary-600 text-white rounded-lg text-sm">Extract patterns</button>
+        <p id="extractResult" class="mt-2 text-slate-500 text-xs hidden"></p>
+        <div class="mt-4 pt-4 border-t"><label class="block font-medium mb-1">Rewrite one ad</label>
+        <textarea id="rewrite_ad_json" rows="2" class="w-full rounded-lg border font-mono text-xs" placeholder='{"primary_text":"...","headline":"...","cta":"..."}'></textarea>
+        <button type="button" id="rewriteBtn" class="mt-2 px-3 py-1.5 bg-slate-600 text-white rounded-lg text-sm">Rewrite as ours</button>
+        <pre id="rewriteResult" class="mt-2 p-2 bg-slate-50 rounded text-xs hidden max-h-32 overflow-auto"></pre></div>
+      </div>
+      </details>
     </section>
 
     <!-- Progress (hidden by default) -->
@@ -275,18 +656,53 @@ INDEX_HTML = """
       <p id="resultError" class="hidden mt-4 p-4 rounded-lg bg-red-50 border border-red-200 text-red-800 text-sm"></p>
     </section>
 
-    <!-- Generated ads: full copy visible after run (ads are text, not PNGs) -->
+    <!-- Generated ads: full copy visible as each ad completes (paginated) -->
     <section id="generatedAdsCard" class="hidden mb-6">
       <h3 class="text-lg font-semibold text-slate-900 mb-1">Your generated ads</h3>
-      <p class="text-sm text-slate-500 mb-4">Ad copy (headline, primary text, CTA) for Facebook &amp; Instagram. These are text assets; use them in Meta Ads Manager or your creative tool. The only PNG download is the quality chart.</p>
+      <p class="text-sm text-slate-500 mb-4">Ads appear below as each one finishes. Expand an ad for scores and iteration history. Paginate through results as they come in.</p>
+      <div id="paginationBar" class="hidden flex items-center justify-between gap-4 mb-4 flex-wrap">
+        <p id="paginationText" class="text-sm text-slate-600">Showing 0–0 of 0</p>
+        <div class="flex items-center gap-2">
+          <button type="button" id="paginationPrev" class="px-3 py-1.5 rounded-lg border border-slate-300 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed">Prev</button>
+          <button type="button" id="paginationNext" class="px-3 py-1.5 rounded-lg border border-slate-300 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed">Next</button>
+        </div>
+      </div>
       <div id="generatedAdsList" class="space-y-4"></div>
+    </section>
+
+    <!-- Evaluation summary (visible after run) -->
+    <section id="summaryCard" class="hidden mb-6 bg-white rounded-2xl shadow-sm border border-slate-200/80 overflow-hidden">
+      <div class="px-6 py-4 border-b border-slate-100">
+        <h3 class="text-lg font-semibold text-slate-900">Evaluation summary</h3>
+        <p class="text-sm text-slate-500 mt-0.5">Same content as evaluation_summary.txt — what you see is what you download.</p>
+      </div>
+      <pre id="summaryText" class="p-6 text-sm text-slate-700 whitespace-pre-wrap font-sans overflow-x-auto"></pre>
+    </section>
+
+    <!-- Quality trend chart (visible after run) -->
+    <section id="chartCard" class="hidden mb-6 bg-white rounded-2xl shadow-sm border border-slate-200/80 overflow-hidden">
+      <div class="px-6 py-4 border-b border-slate-100">
+        <h3 class="text-lg font-semibold text-slate-900">Quality trend</h3>
+        <p class="text-sm text-slate-500 mt-0.5">Average score over run cycles — same as iteration_quality_chart.png.</p>
+      </div>
+      <div class="p-6"><img id="chartImage" src="" alt="Quality trend chart" class="max-w-full h-auto rounded-lg border border-slate-200"></div>
+    </section>
+
+    <!-- Scores table (visible after run) -->
+    <section id="scoresTableCard" class="hidden mb-6 bg-white rounded-2xl shadow-sm border border-slate-200/80 overflow-hidden">
+      <div class="px-6 py-4 border-b border-slate-100">
+        <h3 class="text-lg font-semibold text-slate-900">Scores table</h3>
+        <p class="text-sm text-slate-500 mt-0.5">Per-ad scores — same columns as evaluation_report.csv.</p>
+      </div>
+      <div class="overflow-x-auto"><table id="scoresTable" class="w-full text-sm text-left border-collapse"></table></div>
     </section>
 
     <!-- Output files (hidden by default) -->
     <section id="outputsCard" class="hidden bg-white rounded-2xl shadow-sm border border-slate-200/80 overflow-hidden">
       <div class="px-6 py-4 border-b border-slate-100">
         <h3 class="text-lg font-semibold text-slate-900">Downloads</h3>
-        <p class="text-sm text-slate-500 mt-0.5">Generated datasets and reports from the last run.</p>
+        <p id="outputsRunInfo" class="text-sm text-slate-600 mt-0.5">Current run — same data as shown above.</p>
+        <p class="text-xs text-slate-500 mt-0.5">All runs and their downloads are also on the <a href="/dashboard" class="text-primary-600 hover:underline">Dashboard</a>.</p>
       </div>
       <ul id="outputList" class="divide-y divide-slate-100"></ul>
     </section>
@@ -315,8 +731,15 @@ INDEX_HTML = """
     const liveAdsList = document.getElementById('liveAdsList');
     const generatedAdsCard = document.getElementById('generatedAdsCard');
     const generatedAdsList = document.getElementById('generatedAdsList');
+    const paginationBar = document.getElementById('paginationBar');
+    const paginationText = document.getElementById('paginationText');
+    const paginationPrev = document.getElementById('paginationPrev');
+    const paginationNext = document.getElementById('paginationNext');
 
     let pollTimer = null;
+    let allCompletedAds = [];
+    let currentPage = 1;
+    const PAGE_SIZE = 5;
 
     function esc(s) {
       if (s == null || s === undefined) return '';
@@ -336,11 +759,11 @@ INDEX_HTML = """
         const headline = esc(copy.headline || '—');
         const primary = esc((copy.primary_text || '').slice(0, 140));
         const score = ad.overall_score != null ? Number(ad.overall_score) : '—';
-        const accepted = ad.accepted ? '<span class="inline-flex items-center rounded-full bg-primary-100 text-primary-800 text-xs font-medium px-2 py-0.5">Accepted</span>' : '<span class="inline-flex items-center rounded-full bg-slate-100 text-slate-600 text-xs font-medium px-2 py-0.5">Below threshold</span>';
+        const accepted = ad.accepted ? '<span class="inline-flex items-center rounded-full bg-emerald-100 text-emerald-800 text-xs font-medium px-2 py-0.5">Accepted</span>' : '<span class="inline-flex items-center rounded-full bg-slate-100 text-slate-600 text-xs font-medium px-2 py-0.5">Below threshold</span>';
         return '<div class="rounded-xl border border-slate-200 bg-slate-50/50 p-3 text-left shadow-sm">' +
           '<div class="flex items-start justify-between gap-2">' +
             '<span class="font-semibold text-slate-800 text-sm">' + headline + '</span>' +
-            '<span class="text-sm font-medium text-slate-600 shrink-0">' + score + '</span>' +
+            '<span class="text-sm font-bold ' + scoreColor(score) + ' shrink-0">' + score + '</span>' +
           '</div>' +
           '<p class="text-xs text-slate-600 mt-1 line-clamp-2">' + primary + (primary.length >= 140 ? '…' : '') + '</p>' +
           '<div class="mt-2">' + accepted + '</div>' +
@@ -348,33 +771,94 @@ INDEX_HTML = """
       }).join('');
     }
 
-    function renderGeneratedAds(completedAds) {
-      if (!generatedAdsList) return;
-      if (!completedAds || completedAds.length === 0) {
-        generatedAdsList.innerHTML = '<p class="text-sm text-slate-400">No ads to show.</p>';
-        return;
-      }
-      generatedAdsList.innerHTML = completedAds.map(function(ad, idx) {
-        const copy = ad.ad_copy || {};
-        const headline = esc(copy.headline || '—');
-        const primary = esc(copy.primary_text || '');
-        const description = esc(copy.description || '');
-        const cta = esc(copy.cta || '');
-        const score = ad.overall_score != null ? Number(ad.overall_score) : '—';
-        const accepted = ad.accepted;
-        const badge = accepted ? '<span class="inline-flex items-center rounded-full bg-primary-100 text-primary-800 text-xs font-medium px-2 py-0.5">Accepted</span>' : '<span class="inline-flex items-center rounded-full bg-slate-100 text-slate-600 text-xs font-medium px-2 py-0.5">Below threshold</span>';
-        return '<div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm text-left">' +
-          '<div class="flex items-center justify-between gap-2 flex-wrap">' +
-            '<span class="text-xs font-medium text-slate-400">Ad ' + (idx + 1) + '</span>' +
-            '<span class="text-sm font-semibold text-slate-700">Score: ' + score + '</span>' +
-            badge +
-          '</div>' +
-          '<h4 class="font-semibold text-slate-900 mt-2 text-base">' + headline + '</h4>' +
+    function scoreColor(s) {
+      if (s == null || s === '—') return 'text-slate-600';
+      if (s >= 8) return 'text-emerald-600';
+      if (s >= 7) return 'text-primary-600';
+      if (s >= 5) return 'text-amber-600';
+      return 'text-red-600';
+    }
+    function scoreBg(s) {
+      if (s == null || s === '—') return 'bg-slate-100';
+      if (s >= 8) return 'bg-emerald-50 border-emerald-200';
+      if (s >= 7) return 'bg-primary-50 border-primary-200';
+      if (s >= 5) return 'bg-amber-50 border-amber-200';
+      return 'bg-red-50 border-red-200';
+    }
+
+    function renderOneAd(ad, idx) {
+      const copy = ad.ad_copy || {};
+      const headline = esc(copy.headline || '—');
+      const primary = esc(copy.primary_text || '');
+      const description = esc(copy.description || '');
+      const cta = esc(copy.cta || '');
+      const score = ad.overall_score != null ? Number(ad.overall_score) : '—';
+      const accepted = ad.accepted;
+      const badge = accepted ? '<span class="inline-flex items-center rounded-full bg-emerald-100 text-emerald-800 text-xs font-medium px-2 py-0.5">Accepted</span>' : '<span class="inline-flex items-center rounded-full bg-slate-100 text-slate-600 text-xs font-medium px-2 py-0.5">Below threshold</span>';
+      const dims = ad.dimensions || {};
+      const dimRows = Object.keys(dims).map(function(d) {
+        const o = dims[d];
+        const s = o && (o.score != null) ? o.score : (ad.scores && ad.scores[d]);
+        const r = o && o.rationale ? esc(o.rationale) : '';
+        return '<tr><td class="font-medium text-slate-600 pr-2">' + esc(d) + '</td><td class="pr-2">' + s + '</td><td class="text-slate-500 text-xs">' + r + '</td></tr>';
+      }).join('');
+      const hist = ad.iteration_history || [];
+      const histRows = hist.map(function(h, i) {
+        const t = h.targeted_dimension ? ' → ' + esc(h.targeted_dimension) : '';
+        return '<tr><td class="pr-2">' + (h.iteration || i + 1) + '</td><td class="pr-2">' + (h.overall_score != null ? h.overall_score : '—') + '</td><td class="text-slate-500 text-xs">' + esc(t) + '</td></tr>';
+      }).join('');
+      return '<details class="rounded-xl border border-slate-200 bg-white shadow-sm text-left group">' +
+        '<summary class="p-4 cursor-pointer list-none flex items-center justify-between gap-2 flex-wrap">' +
+          (copy.image_path ? '<img src="/api/creatives/' + esc(copy.image_path) + '" alt="" class="w-12 h-12 rounded object-cover shrink-0">' : '') +
+          '<span class="text-xs font-medium text-slate-400">' + (ad.id || ('Ad ' + (idx + 1))) + '</span>' +
+          '<span class="text-sm font-bold ' + scoreColor(score) + '">Score: ' + score + '</span>' +
+          badge +
+          '<span class="text-slate-400 text-xs">' + headline + '</span>' +
+          '<button type="button" class="improve-ad-btn px-2 py-1 rounded-lg border border-primary-500 text-primary-600 text-xs font-medium hover:bg-primary-50 shrink-0" data-ad-id="' + esc(ad.id || ('ad_' + idx)) + '" onclick="event.preventDefault();event.stopPropagation();">Make it better</button>' +
+        '</summary>' +
+        '<div class="px-4 pb-4 border-t border-slate-100">' +
+          (copy.image_path ? '<div class="mt-3"><img src="/api/creatives/' + esc(copy.image_path) + '" alt="Generated ad creative" class="rounded-lg border border-slate-200 max-h-64 w-auto object-contain"></div>' : '') +
+          '<h4 class="font-semibold text-slate-900 mt-3 text-base">' + headline + '</h4>' +
           (primary ? '<p class="text-sm text-slate-700 mt-2 whitespace-pre-wrap">' + primary + '</p>' : '') +
           (description ? '<p class="text-sm text-slate-600 mt-1">' + description + '</p>' : '') +
           (cta ? '<p class="text-sm font-medium text-primary-600 mt-2">CTA: ' + cta + '</p>' : '') +
-          '</div>';
-      }).join('');
+          (dimRows ? '<div class="mt-4"><p class="text-xs font-semibold text-slate-500 uppercase mb-1">Dimensions</p><table class="w-full text-sm"><tbody>' + dimRows + '</tbody></table></div>' : '') +
+          (histRows ? '<div class="mt-3"><p class="text-xs font-semibold text-slate-500 uppercase mb-1">Iteration history</p><table class="w-full text-sm"><thead><tr><th class="text-left pr-2">Cycle</th><th class="text-left pr-2">Score</th><th class="text-left">Targeted</th></tr></thead><tbody>' + histRows + '</tbody></table></div>' : '') +
+        '</div>' +
+        '</details>';
+    }
+
+    function renderGeneratedAdsPage(ads, page, pageSize) {
+      if (!generatedAdsList) return;
+      const total = (ads && ads.length) || 0;
+      if (total === 0) {
+        generatedAdsList.innerHTML = '<p class="text-sm text-slate-400">No ads yet. Ads will appear here as each one completes.</p>';
+        if (paginationBar) paginationBar.classList.add('hidden');
+        return;
+      }
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      const safePage = Math.max(1, Math.min(page, totalPages));
+      const start = (safePage - 1) * pageSize;
+      const end = Math.min(start + pageSize, total);
+      const slice = ads.slice(start, end);
+      generatedAdsList.innerHTML = slice.map(function(ad, i) { return renderOneAd(ad, start + i); }).join('');
+      if (paginationBar) {
+        paginationBar.classList.remove('hidden');
+        paginationText.textContent = 'Showing ' + (start + 1) + '–' + end + ' of ' + total;
+        paginationPrev.disabled = safePage <= 1;
+        paginationNext.disabled = safePage >= totalPages;
+      }
+      currentPage = safePage;
+    }
+
+    function renderGeneratedAds(completedAds) {
+      if (!completedAds || completedAds.length === 0) {
+        allCompletedAds = [];
+        renderGeneratedAdsPage([], 1, PAGE_SIZE);
+        return;
+      }
+      allCompletedAds = completedAds;
+      renderGeneratedAdsPage(allCompletedAds, currentPage, PAGE_SIZE);
     }
 
     function showProgress(show) {
@@ -404,6 +888,16 @@ INDEX_HTML = """
 
         if (data.status === 'running' && data.completed_ads) {
           renderLiveAds(data.completed_ads);
+          if (data.completed_ads.length > 0) {
+            const prevTotal = allCompletedAds.length;
+            allCompletedAds = data.completed_ads;
+            if (prevTotal > 0 && allCompletedAds.length > prevTotal) {
+              const totalPages = Math.ceil(prevTotal / PAGE_SIZE);
+              if (currentPage >= totalPages) currentPage = Math.ceil(allCompletedAds.length / PAGE_SIZE);
+            }
+            renderGeneratedAdsPage(allCompletedAds, currentPage, PAGE_SIZE);
+            showGeneratedAds(true);
+          }
         }
 
         if (data.status === 'done') {
@@ -416,18 +910,19 @@ INDEX_HTML = """
           resultBody.innerHTML = statCard('Ads generated', data.result.num_ads) +
             statCard('Accepted (≥7.0)', data.result.accepted) +
             statCard('Average score', data.result.avg_score) +
+            (data.result.backend ? statCard('Model', data.result.backend + ' (generation + evaluation)') : '') +
             (data.result.total_tokens != null ? statCard('Total tokens', data.result.total_tokens.toLocaleString()) : '') +
             (data.result.estimated_cost_usd != null ? statCard('Est. cost', '$' + data.result.estimated_cost_usd) : '') +
             (data.result.roi_accepted_per_1k_tokens != null ? statCard('ROI (accepted/1K tok)', data.result.roi_accepted_per_1k_tokens) : '') +
             statCard('Output', '<span class="text-sm font-mono text-slate-600 truncate block" title="' + data.result.output_dir + '">' + data.result.output_dir.replace(/.*[/\\\\]/, '') + '</span>');
           showResult(true);
           if (data.completed_ads && data.completed_ads.length > 0) {
-            renderGeneratedAds(data.completed_ads);
+            allCompletedAds = data.completed_ads;
+            renderGeneratedAdsPage(allCompletedAds, currentPage, PAGE_SIZE);
             showGeneratedAds(true);
-          } else {
-            showGeneratedAds(false);
           }
           fetchOutputs();
+          fetchResultViews();
         } else if (data.status === 'error') {
           clearInterval(pollTimer);
           runBtn.disabled = false;
@@ -444,12 +939,85 @@ INDEX_HTML = """
 
     function fetchOutputs() {
       fetch('/api/outputs').then(r => r.json()).then(data => {
-        outputList.innerHTML = data.files.map(f => {
+        const files = data.files || [];
+        const runId = data.run_id;
+        const runTs = data.run_timestamp;
+        const runInfoEl = document.getElementById('outputsRunInfo');
+        if (runInfoEl) {
+          if (runId && runTs) {
+            try {
+              const d = new Date(runTs);
+              const dateStr = isNaN(d.getTime()) ? runTs.slice(0, 19) : (d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) + ', ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }));
+              runInfoEl.textContent = 'Current run: ' + dateStr + ' — ' + runId;
+            } catch (e) {
+              runInfoEl.textContent = 'Current run: ' + runId;
+            }
+          } else {
+            runInfoEl.textContent = 'Same data as shown above. Download when you need the files.';
+          }
+        }
+        outputList.innerHTML = files.map(f => {
           const size = f.size ? (Math.round(f.size / 1024) + ' KB') : '';
-          return '<li class="flex items-center justify-between gap-4 px-6 py-3 hover:bg-slate-50/80"><a href="/api/output/' + f.name + '" download class="font-medium text-primary-600 hover:text-primary-700 truncate">' + f.name + '</a><span class="text-sm text-slate-400 shrink-0">' + size + '</span></li>';
+          const desc = (f.description || '').trim();
+          return '<li class="px-6 py-3 hover:bg-slate-50/80">' +
+            '<div class="flex items-center justify-between gap-4">' +
+              '<a href="/api/output/' + esc(f.name) + '" download class="font-medium text-primary-600 hover:text-primary-700 truncate">' + esc(f.name) + '</a>' +
+              '<span class="text-sm text-slate-400 shrink-0">' + size + '</span>' +
+            '</div>' +
+            (desc ? '<p class="text-xs text-slate-500 mt-1">' + esc(desc) + '</p>' : '') +
+          '</li>';
         }).join('');
-        showOutputs(data.files.length > 0);
+        showOutputs(files.length > 0);
       });
+    }
+
+    function showEl(id, show) {
+      const el = document.getElementById(id);
+      if (el) el.classList.toggle('hidden', !show);
+    }
+
+    function fetchResultViews() {
+      fetch('/api/result/ads_dataset').then(r => r.json()).then(function(ads) {
+        if (ads && ads.length > 0) {
+          allCompletedAds = ads;
+          renderGeneratedAdsPage(allCompletedAds, currentPage, PAGE_SIZE);
+          if (generatedAdsCard) generatedAdsCard.classList.remove('hidden');
+        }
+      }).catch(function() {});
+      fetch('/api/result/summary').then(function(r) {
+        if (r.ok) return r.text();
+        return null;
+      }).then(function(text) {
+        const summaryText = document.getElementById('summaryText');
+        const summaryCard = document.getElementById('summaryCard');
+        if (summaryText && summaryCard) {
+          summaryText.textContent = text || '';
+          showEl('summaryCard', !!text);
+        }
+      }).catch(function() {});
+      const chartImage = document.getElementById('chartImage');
+      const chartCard = document.getElementById('chartCard');
+      if (chartImage && chartCard) {
+        chartImage.onerror = function() { showEl('chartCard', false); };
+        chartImage.onload = function() { showEl('chartCard', true); };
+        chartImage.src = '/api/result/chart?t=' + Date.now();
+      }
+      fetch('/api/result/evaluation_report').then(r => r.json()).then(function(rows) {
+        const table = document.getElementById('scoresTable');
+        const card = document.getElementById('scoresTableCard');
+        if (!table || !card) return;
+        if (!rows || rows.length === 0) { showEl('scoresTableCard', false); return; }
+        const cols = Object.keys(rows[0]);
+        table.innerHTML = '<thead class="bg-slate-50 border-b border-slate-200"><tr>' +
+          cols.map(function(c) { return '<th class="px-4 py-2 text-left text-xs font-semibold text-slate-600">' + esc(c) + '</th>'; }).join('') +
+          '</tr></thead><tbody>' +
+          rows.map(function(row, i) {
+            return '<tr class="border-b border-slate-100 ' + (i % 2 ? 'bg-slate-50/50' : '') + '">' +
+              cols.map(function(c) { return '<td class="px-4 py-2 text-sm text-slate-700">' + esc(String(row[c] != null ? row[c] : '')) + '</td>'; }).join('') +
+              '</tr>';
+          }).join('') + '</tbody>';
+        showEl('scoresTableCard', true);
+      }).catch(function() {});
     }
 
     form.addEventListener('submit', function(e) {
@@ -460,18 +1028,32 @@ INDEX_HTML = """
       const num_ads = parseInt(document.getElementById('num_ads').value, 10) || 5;
       const max_iterations = parseInt(document.getElementById('max_iterations').value, 10) || 6;
       const seed = parseInt(document.getElementById('seed').value, 10) || 42;
+      const audience = (document.getElementById('audience') && document.getElementById('audience').value) ? document.getElementById('audience').value.trim() : '';
+      const product = (document.getElementById('product') && document.getElementById('product').value) ? document.getElementById('product').value.trim() : '';
+      const goal = (document.getElementById('goal') && document.getElementById('goal').value) ? document.getElementById('goal').value.trim() : '';
+      const tone = (document.getElementById('tone') && document.getElementById('tone').value) ? document.getElementById('tone').value.trim() : '';
+      const qualityThresholdEl = document.getElementById('quality_threshold');
+      const quality_threshold = qualityThresholdEl && qualityThresholdEl.value ? parseFloat(qualityThresholdEl.value) : undefined;
+      const num_variants = parseInt(document.getElementById('num_variants').value, 10) || 1;
+      const enable_image_gen = !!(document.getElementById('enable_image_gen') && document.getElementById('enable_image_gen').checked);
+      const concurrency = Math.min(8, Math.max(1, parseInt(document.getElementById('concurrency').value, 10) || 1));
       runBtn.disabled = true;
       runLabel.textContent = 'Running…';
       runIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>';
       showProgress(true);
       showResult(false);
+      allCompletedAds = [];
+      currentPage = 1;
       showGeneratedAds(false);
+      showEl('summaryCard', false);
+      showEl('chartCard', false);
+      showEl('scoresTableCard', false);
       fetch('/api/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ api_key: api_key || undefined, openrouter_api_key: openrouter_api_key || undefined, openrouter_model: openrouter_model || undefined, num_ads, max_iterations, seed })
+        body: JSON.stringify({ api_key: api_key || undefined, openrouter_api_key: openrouter_api_key || undefined, openrouter_model: openrouter_model || undefined, num_ads, max_iterations, seed, quality_threshold: quality_threshold || undefined, num_variants, enable_image_gen, concurrency, audience: audience || undefined, product: product || undefined, goal: goal || undefined, tone: tone || undefined })
       }).then(r => r.json()).then(data => {
-        if (data.ok) pollTimer = setInterval(poll, 800);
+        if (data.ok) pollTimer = setInterval(poll, 500);
         else { runBtn.disabled = false; runLabel.textContent = 'Run generator'; runIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>'; showProgress(false); alert(data.error || 'Failed to start'); }
       }).catch(function() {
         runBtn.disabled = false;
@@ -482,7 +1064,63 @@ INDEX_HTML = """
       });
     });
 
+    if (paginationPrev) paginationPrev.addEventListener('click', function() {
+      if (currentPage <= 1) return;
+      currentPage--;
+      renderGeneratedAdsPage(allCompletedAds, currentPage, PAGE_SIZE);
+    });
+    if (paginationNext) paginationNext.addEventListener('click', function() {
+      const totalPages = Math.ceil((allCompletedAds.length || 0) / PAGE_SIZE);
+      if (currentPage >= totalPages) return;
+      currentPage++;
+      renderGeneratedAdsPage(allCompletedAds, currentPage, PAGE_SIZE);
+    });
+
+    if (generatedAdsList) generatedAdsList.addEventListener('click', function(e) {
+      var btn = e.target && e.target.closest && e.target.closest('.improve-ad-btn');
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      var adId = btn.getAttribute('data-ad-id');
+      if (!adId) return;
+      btn.disabled = true;
+      btn.textContent = 'Improving…';
+      fetch('/api/improve_ad', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad_id: adId }) })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.ok && data.ad) {
+            var idx = allCompletedAds.findIndex(function(a) { return (a.id || a.ad_id) === adId; });
+            if (idx >= 0) {
+              allCompletedAds[idx] = data.ad;
+              renderGeneratedAdsPage(allCompletedAds, currentPage, PAGE_SIZE);
+            }
+          } else {
+            alert(data.error || 'Improve failed');
+          }
+        })
+        .catch(function() { alert('Request failed'); })
+        .finally(function() { btn.disabled = false; btn.textContent = 'Make it better'; });
+    });
+
+    var extractBtn = document.getElementById('extractPatternsBtn');
+    if (extractBtn) extractBtn.addEventListener('click', function() {
+      var ta = document.getElementById('competitor_ads_json');
+      var ads = []; try { ads = JSON.parse(ta.value || '[]'); } catch (e) { alert('Invalid JSON'); return; }
+      if (!Array.isArray(ads) || !ads.length) { alert('Paste a JSON array of ads'); return; }
+      fetch('/api/competitor/extract', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ads: ads }) }).then(function(r) { return r.json(); }).then(function(d) {
+        var el = document.getElementById('extractResult'); el.classList.remove('hidden'); el.textContent = d.ok ? 'Saved. Next run will use these patterns.' : (d.error || 'Failed');
+      });
+    });
+    var rewriteBtn = document.getElementById('rewriteBtn');
+    if (rewriteBtn) rewriteBtn.addEventListener('click', function() {
+      var ta = document.getElementById('rewrite_ad_json');
+      var ad = {}; try { ad = JSON.parse(ta.value || '{}'); } catch (e) { alert('Invalid JSON'); return; }
+      fetch('/api/competitor/rewrite', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad: ad }) }).then(function(r) { return r.json(); }).then(function(d) {
+        var el = document.getElementById('rewriteResult'); el.classList.remove('hidden'); el.textContent = (d.ok && d.ad) ? JSON.stringify(d.ad, null, 2) : (d.error || 'Failed');
+      });
+    });
     fetchOutputs();
+    fetchResultViews();
   </script>
 </body>
 </html>
@@ -499,116 +1137,232 @@ DASHBOARD_HTML = """
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
     tailwind.config = { theme: { extend: { fontFamily: { sans: ['DM Sans', 'sans-serif'] }, colors: { primary: { 500: '#10b981', 600: '#059669' } } } } }
   </script>
 </head>
 <body class="min-h-screen bg-slate-50 text-slate-800 font-sans antialiased">
-  <header class="border-b bg-white shadow-sm">
-    <div class="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
-      <a href="/" class="text-xl font-bold text-slate-900">Nerdy <span class="text-primary-600">Ad Engine</span></a>
-      <a href="/" class="text-sm text-slate-600 hover:text-primary-600">← Generator</a>
+  <header class="border-b border-slate-200/80 bg-white/90 backdrop-blur-sm sticky top-0 z-10">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <span class="text-xl font-bold tracking-tight text-slate-900">Nerdy</span>
+        <span class="text-xl font-semibold text-primary-600">Ad Engine</span>
+      </div>
+      <nav class="flex items-center gap-1">
+        <a href="/" class="px-3 py-1.5 text-sm font-medium rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-800 transition-colors">Generator</a>
+        <a href="/dashboard" class="px-3 py-1.5 text-sm font-medium rounded-lg bg-primary-50 text-primary-700">Campaigns</a>
+      </nav>
     </div>
   </header>
   <main class="max-w-6xl mx-auto px-4 py-8">
-    <h1 class="text-2xl font-bold text-slate-900 mb-2">ROI Dashboard</h1>
-    <p class="text-slate-600 mb-6">Was it worth the tokens? Track cost, accepted ads, and value per run.</p>
+    <h1 class="text-2xl font-bold text-slate-900 mb-1">Campaigns</h1>
+    <p class="text-slate-500 text-sm mb-6">Browse past runs, compare performance, and iterate on campaigns.</p>
 
-    <div id="summaryCards" class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 mb-8"></div>
-
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+    <!-- Aggregate stats (filled by JS) -->
+    <div id="aggStats" class="hidden grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
       <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-        <h3 class="font-semibold text-slate-800 mb-3">Tokens per run</h3>
-        <canvas id="chartTokens" height="200"></canvas>
+        <p class="text-xs font-medium text-slate-500 uppercase tracking-wide">Campaigns</p>
+        <p id="aggCampaigns" class="text-2xl font-bold text-slate-900 mt-1">0</p>
       </div>
       <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-        <h3 class="font-semibold text-slate-800 mb-3">Est. cost (USD) per run</h3>
-        <canvas id="chartCost" height="200"></canvas>
+        <p class="text-xs font-medium text-slate-500 uppercase tracking-wide">Total Ads</p>
+        <p id="aggAds" class="text-2xl font-bold text-slate-900 mt-1">0</p>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+        <p class="text-xs font-medium text-slate-500 uppercase tracking-wide">Avg Score</p>
+        <p id="aggScore" class="text-2xl font-bold text-primary-600 mt-1">—</p>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+        <p class="text-xs font-medium text-slate-500 uppercase tracking-wide">Acceptance Rate</p>
+        <p id="aggAccept" class="text-2xl font-bold text-emerald-600 mt-1">—</p>
       </div>
     </div>
-    <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm mb-8">
-      <h3 class="font-semibold text-slate-800 mb-3">Accepted ads per run</h3>
-      <canvas id="chartAccepted" height="200"></canvas>
+
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+      <div class="flex items-center gap-3">
+        <label class="text-sm font-medium text-slate-600">Sort by</label>
+        <select id="sortBy" class="rounded-lg border border-slate-300 text-sm px-3 py-1.5">
+          <option value="date_desc">Newest first</option>
+          <option value="date_asc">Oldest first</option>
+          <option value="accepted_desc">Most accepted</option>
+          <option value="score_desc">Highest score</option>
+          <option value="tokens_desc">Most tokens</option>
+        </select>
+      </div>
+      <details class="text-sm" id="glossary">
+        <summary class="cursor-pointer text-slate-500 hover:text-slate-700 select-none">Glossary</summary>
+        <div class="absolute right-4 mt-1 bg-white rounded-lg border border-slate-200 shadow-lg p-4 text-xs text-slate-600 space-y-1 max-w-xs z-10">
+          <p><strong>Tokens</strong> — Text units the AI reads/writes (~4 chars each).</p>
+          <p><strong>Quality bar</strong> — 7.0/10. Ads at or above are accepted.</p>
+          <p><strong>Points</strong> — Quality per dollar (avg score / cost).</p>
+        </div>
+      </details>
     </div>
 
-    <div class="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
-      <h3 class="font-semibold text-slate-800 px-4 py-3 border-b border-slate-100">Run history</h3>
-      <div class="overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead><tr class="bg-slate-50 text-left text-slate-600 font-medium">
-            <th class="px-4 py-2">Time</th>
-            <th class="px-4 py-2">Ads</th>
-            <th class="px-4 py-2">Accepted</th>
-            <th class="px-4 py-2">Score</th>
-            <th class="px-4 py-2">Tokens</th>
-            <th class="px-4 py-2">Cost</th>
-            <th class="px-4 py-2">ROI (accepted/1K tok)</th>
-            <th class="px-4 py-2">Score/$</th>
-          </tr></thead>
-          <tbody id="runHistoryBody"></tbody>
-        </table>
+    <div id="runSummaries"></div>
+    <p id="noRuns" class="hidden py-8 text-slate-500 text-center">No runs yet. Generate ads from the Generator page to see campaigns here.</p>
+
+    <div id="drillDown" class="hidden fixed inset-0 z-20 bg-slate-900/50 flex items-center justify-center p-4">
+      <div class="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+        <div class="px-4 py-3 border-b flex items-center justify-between">
+          <h2 id="drillTitle" class="font-semibold text-slate-900">Campaign ads</h2>
+          <button type="button" id="drillClose" class="text-slate-500 hover:text-slate-800">Close</button>
+        </div>
+        <div id="drillBody" class="p-4 overflow-y-auto flex-1 text-sm"></div>
       </div>
-      <p id="noRuns" class="hidden px-4 py-6 text-slate-500 text-center">No runs yet. Generate ads to see ROI here.</p>
     </div>
   </main>
 
   <script>
+    var allRuns = [];
+
+    function summaryText(r) {
+      const numAds = r.num_ads || 0;
+      const accepted = r.accepted ?? 0;
+      const avgScore = r.avg_score != null ? r.avg_score : null;
+      const tokens = r.total_tokens != null ? r.total_tokens : null;
+      const cost = r.estimated_cost_usd != null ? r.estimated_cost_usd : null;
+      const pctAccepted = numAds > 0 ? Math.round((accepted / numAds) * 100) : 0;
+      return '<div class="flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-600">' +
+        '<span><strong class="text-slate-900">' + numAds + '</strong> ads</span>' +
+        '<span><strong class="text-emerald-700">' + accepted + '</strong> accepted (' + pctAccepted + '%)</span>' +
+        (avgScore != null ? '<span>Score: <strong class="' + (avgScore >= 8 ? 'text-emerald-700' : avgScore >= 7 ? 'text-primary-700' : 'text-amber-600') + '">' + avgScore + '</strong>/10</span>' : '') +
+        (tokens != null ? '<span>' + (tokens >= 1000 ? (tokens / 1000).toFixed(1) + 'K' : tokens) + ' tokens</span>' : '') +
+        (cost != null && cost > 0 ? '<span>$' + cost.toFixed(4) + '</span>' : '') +
+        '</div>';
+    }
+
+    function sortRuns(runs, key) {
+      var list = runs.slice();
+      if (key === 'date_desc') list.reverse();
+      else if (key === 'date_asc') { }
+      else if (key === 'accepted_desc') list.sort(function(a,b) { return (b.accepted || 0) - (a.accepted || 0); });
+      else if (key === 'score_desc') list.sort(function(a,b) { return (b.avg_score || 0) - (a.avg_score || 0); });
+      else if (key === 'tokens_desc') list.sort(function(a,b) { return (b.total_tokens || 0) - (a.total_tokens || 0); });
+      return list;
+    }
+
+    function renderCampaigns(runs) {
+      const container = document.getElementById('runSummaries');
+      const sortKey = (document.getElementById('sortBy') && document.getElementById('sortBy').value) || 'date_desc';
+      const sorted = sortRuns(runs, sortKey);
+      container.innerHTML = sorted.map(function(r) {
+        const runId = r.run_id || (r.timestamp || '').replace(/[-:Z.]/g, '').slice(0, 15);
+        const time = (r.timestamp || '').replace('T', ' ').slice(0, 19).replace(/-/g, '/');
+        const name = (r.name || '').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const outputs = r.outputs || [];
+        const downloadsHtml = outputs.length ? (
+          '<div class="mt-2 pt-2 border-t border-slate-100">' +
+            '<p class="text-xs font-medium text-slate-500 mb-1">Downloads</p>' +
+            '<div class="flex flex-wrap gap-x-3 gap-y-1 text-xs">' +
+              outputs.map(function(f) {
+                const sz = f.size != null ? (Math.round(f.size / 1024) + ' KB') : '';
+                return '<a href="/api/runs/' + encodeURIComponent(runId) + '/output/' + encodeURIComponent(f.name) + '" download class="text-primary-600 hover:underline">' + f.name + (sz ? ' (' + sz + ')' : '') + '</a>';
+              }).join('') +
+            '</div>' +
+          '</div>'
+        ) : '';
+        return '<div class="bg-white rounded-xl border border-slate-200 p-4 shadow-sm mb-4" data-run-id="' + runId + '">' +
+          '<div class="flex flex-wrap items-start justify-between gap-2 mb-2">' +
+            '<div class="flex-1 min-w-0">' +
+              '<input type="text" class="campaign-name text-sm font-medium text-slate-800 border-0 border-b border-transparent hover:border-slate-300 focus:border-primary-500 focus:ring-0 bg-transparent w-full max-w-md" value="' + name + '" placeholder="Name this campaign" data-run-id="' + runId + '" />' +
+              '<p class="text-slate-500 text-xs mt-0.5">' + time + (r.backend ? ' · ' + r.backend : '') + '</p>' +
+            '</div>' +
+            '<button type="button" class="view-ads px-3 py-1.5 text-sm font-medium text-primary-600 hover:bg-primary-50 rounded-lg" data-run-id="' + runId + '">View ads</button>' +
+            '<button type="button" class="improve-again px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg border border-slate-200" data-run-id="' + runId + '">Improve again</button>' +
+          '</div>' +
+          '<p class="text-slate-800 leading-relaxed">' + summaryText(r) + '</p>' +
+          downloadsHtml +
+          '</div>';
+      }).join('');
+
+      document.querySelectorAll('.campaign-name').forEach(function(inp) {
+        inp.addEventListener('blur', function() {
+          const id = this.getAttribute('data-run-id');
+          const name = this.value.trim();
+          fetch('/api/campaign_name', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ run_id: id, name: name }) }).then(function() {
+            var run = allRuns.find(function(r) { return (r.run_id || '').replace(/[-:Z.]/g,'').slice(0,15) === id || r.run_id === id; });
+            if (run) run.name = name;
+          });
+        });
+      });
+      document.querySelectorAll('.view-ads').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          const runId = this.getAttribute('data-run-id');
+          const run = allRuns.find(function(r) { return (r.run_id || '').replace(/[-:Z.]/g,'').slice(0,15) === runId || r.run_id === runId; });
+          const title = (run && run.name) ? run.name : ('Run ' + runId);
+          document.getElementById('drillTitle').textContent = title;
+          document.getElementById('drillDown').classList.remove('hidden');
+          document.getElementById('drillBody').innerHTML = '<p class="text-slate-500">Loading…</p>';
+          fetch('/api/runs/' + encodeURIComponent(runId) + '/ads').then(function(res) { return res.json(); }).then(function(ads) {
+            if (!ads || ads.length === 0) {
+              document.getElementById('drillBody').innerHTML = '<p class="text-slate-500">No ad data for this run. Per-run ads are saved for runs after the dashboard update.</p>';
+              return;
+            }
+            var html = '<table class="w-full border border-slate-200"><thead><tr class="bg-slate-50 text-left text-slate-600 font-medium"><th class="px-3 py-2 border-b">Ad</th><th class="px-3 py-2 border-b">Headline</th><th class="px-3 py-2 border-b">Score</th><th class="px-3 py-2 border-b">Accepted</th><th class="px-3 py-2 border-b">Iterations</th></tr></thead><tbody>';
+            ads.forEach(function(ad) {
+              const copy = ad.ad_copy || {};
+              const headline = (copy.headline || copy.primary_text || '—').slice(0, 60);
+              const score = ad.overall_score != null ? ad.overall_score : '—';
+              const acc = ad.accepted ? 'Yes' : 'No';
+              const iter = ad.iteration_count != null ? ad.iteration_count : '—';
+              html += '<tr class="border-t border-slate-100"><td class="px-3 py-2 font-mono text-xs">' + (ad.id || '—') + '</td><td class="px-3 py-2">' + headline + '</td><td class="px-3 py-2">' + score + '</td><td class="px-3 py-2">' + acc + '</td><td class="px-3 py-2">' + iter + '</td></tr>';
+            });
+            html += '</tbody></table>';
+            document.getElementById('drillBody').innerHTML = html;
+          }).catch(function() {
+            document.getElementById('drillBody').innerHTML = '<p class="text-red-600">Failed to load ads.</p>';
+          });
+        });
+      });
+      document.querySelectorAll('.improve-again').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var runId = btn.getAttribute('data-run-id');
+          if (!runId) return;
+          btn.disabled = true;
+          fetch('/api/iterate_campaign', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ run_id: runId, max_extra_iterations: 3 }) }).then(function(r) { return r.json(); }).then(function(data) {
+            if (!data.ok) { btn.disabled = false; alert(data.error || 'Failed'); return; }
+            var iv = setInterval(function() {
+              fetch('/api/status').then(function(r) { return r.json(); }).then(function(s) {
+                if (s.status === 'done' && s.result) { clearInterval(iv); btn.disabled = false; alert('Done. Refresh to see new campaign.'); fetch('/api/run_history').then(function(r) { return r.json(); }).then(function(runs) { allRuns = runs || []; renderCampaigns(allRuns); }); }
+                else if (s.status === 'error') { clearInterval(iv); btn.disabled = false; alert('Error: ' + (s.error || '')); }
+              });
+            }, 1500);
+          }).catch(function() { btn.disabled = false; alert('Request failed'); });
+        });
+      });
+    }
+
+    document.getElementById('sortBy').addEventListener('change', function() { renderCampaigns(allRuns); });
+    document.getElementById('drillClose').addEventListener('click', function() { document.getElementById('drillDown').classList.add('hidden'); });
+
+    function updateAggStats(runs) {
+      if (!runs || runs.length === 0) return;
+      var totalAds = 0, totalAccepted = 0, scoreSum = 0, scoreCount = 0;
+      runs.forEach(function(r) {
+        totalAds += (r.num_ads || 0);
+        totalAccepted += (r.accepted || 0);
+        if (r.avg_score != null) { scoreSum += r.avg_score; scoreCount++; }
+      });
+      var el = document.getElementById('aggStats');
+      if (el) el.classList.remove('hidden');
+      var c = document.getElementById('aggCampaigns'); if (c) c.textContent = runs.length;
+      var a = document.getElementById('aggAds'); if (a) a.textContent = totalAds;
+      var s = document.getElementById('aggScore'); if (s) s.textContent = scoreCount > 0 ? (scoreSum / scoreCount).toFixed(2) : '—';
+      var acc = document.getElementById('aggAccept'); if (acc) acc.textContent = totalAds > 0 ? Math.round((totalAccepted / totalAds) * 100) + '%' : '—';
+    }
+
     fetch('/api/run_history').then(r => r.json()).then(function(runs) {
-      const cards = document.getElementById('summaryCards');
-      const tbody = document.getElementById('runHistoryBody');
+      const container = document.getElementById('runSummaries');
       const noRuns = document.getElementById('noRuns');
 
       if (!runs || runs.length === 0) {
         noRuns.classList.remove('hidden');
-        cards.innerHTML = '<p class="col-span-full text-slate-500">Run the generator to populate ROI metrics.</p>';
         return;
       }
-
-      const totalTokens = runs.reduce(function(s, r) { return s + (r.total_tokens || 0); }, 0);
-      const totalCost = runs.reduce(function(s, r) { return s + (r.estimated_cost_usd || 0); }, 0);
-      const totalAccepted = runs.reduce(function(s, r) { return s + (r.accepted || 0); }, 0);
-      const avgRoi = runs.length ? runs.reduce(function(s, r) { return s + (r.roi_accepted_per_1k_tokens || 0); }, 0) / runs.length : 0;
-      const avgScorePerDollar = runs.length ? runs.reduce(function(s, r) { return s + (r.roi_score_per_dollar || 0); }, 0) / runs.length : 0;
-
-      cards.innerHTML =
-        '<div class="bg-white rounded-xl border p-4 shadow-sm"><p class="text-xs text-slate-500 uppercase">Runs</p><p class="text-2xl font-bold text-slate-900">' + runs.length + '</p></div>' +
-        '<div class="bg-white rounded-xl border p-4 shadow-sm"><p class="text-xs text-slate-500 uppercase">Total tokens</p><p class="text-2xl font-bold text-slate-900">' + totalTokens.toLocaleString() + '</p></div>' +
-        '<div class="bg-white rounded-xl border p-4 shadow-sm"><p class="text-xs text-slate-500 uppercase">Est. cost</p><p class="text-2xl font-bold text-slate-900">$' + totalCost.toFixed(4) + '</p></div>' +
-        '<div class="bg-white rounded-xl border p-4 shadow-sm"><p class="text-xs text-slate-500 uppercase">Accepted ads</p><p class="text-2xl font-bold text-primary-600">' + totalAccepted + '</p></div>' +
-        '<div class="bg-white rounded-xl border p-4 shadow-sm"><p class="text-xs text-slate-500 uppercase">ROI (accepted/1K tok)</p><p class="text-2xl font-bold text-slate-900">' + avgRoi.toFixed(3) + '</p></div>' +
-        '<div class="bg-white rounded-xl border p-4 shadow-sm"><p class="text-xs text-slate-500 uppercase">Score / $</p><p class="text-2xl font-bold text-slate-900">' + avgScorePerDollar.toFixed(1) + '</p></div>';
-
-      tbody.innerHTML = runs.slice().reverse().map(function(r) {
-        const t = (r.timestamp || '').replace('T', ' ').slice(0, 19);
-        return '<tr class="border-t border-slate-100 hover:bg-slate-50">' +
-          '<td class="px-4 py-2 font-mono text-xs">' + t + '</td>' +
-          '<td class="px-4 py-2">' + (r.num_ads || 0) + '</td>' +
-          '<td class="px-4 py-2">' + (r.accepted || 0) + '</td>' +
-          '<td class="px-4 py-2">' + (r.avg_score != null ? r.avg_score : '—') + '</td>' +
-          '<td class="px-4 py-2">' + (r.total_tokens != null ? r.total_tokens.toLocaleString() : '—') + '</td>' +
-          '<td class="px-4 py-2">$' + (r.estimated_cost_usd != null ? r.estimated_cost_usd : 0) + '</td>' +
-          '<td class="px-4 py-2">' + (r.roi_accepted_per_1k_tokens != null ? r.roi_accepted_per_1k_tokens.toFixed(3) : '—') + '</td>' +
-          '<td class="px-4 py-2">' + (r.roi_score_per_dollar != null ? r.roi_score_per_dollar : '—') + '</td>' +
-          '</tr>';
-      }).join('');
-
-      const labels = runs.slice().reverse().map(function(r) { return (r.timestamp || '').slice(0, 16); });
-      new Chart(document.getElementById('chartTokens'), {
-        type: 'line',
-        data: { labels: labels, datasets: [{ label: 'Tokens', data: runs.slice().reverse().map(function(r) { return r.total_tokens || 0; }), borderColor: '#10b981', fill: false }] },
-        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
-      });
-      new Chart(document.getElementById('chartCost'), {
-        type: 'line',
-        data: { labels: labels, datasets: [{ label: 'Cost (USD)', data: runs.slice().reverse().map(function(r) { return r.estimated_cost_usd || 0; }), borderColor: '#059669', fill: false }] },
-        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
-      });
-      new Chart(document.getElementById('chartAccepted'), {
-        type: 'bar',
-        data: { labels: labels, datasets: [{ label: 'Accepted', data: runs.slice().reverse().map(function(r) { return r.accepted || 0; }), backgroundColor: '#10b981' }] },
-        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
-      });
+      allRuns = runs;
+      updateAggStats(runs);
+      renderCampaigns(runs);
     });
   </script>
 </body>
@@ -618,7 +1372,18 @@ DASHBOARD_HTML = """
 
 def main():
     port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
+    for attempt in range(10):
+        try:
+            app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
+            return
+        except OSError as e:
+            if "Address already in use" in str(e) or (hasattr(e, "errno") and e.errno == 48):
+                print("Port %d in use, trying %d..." % (port, port + 1), file=__import__("sys").stderr)
+                port += 1
+            else:
+                raise
+    print("Could not bind to any port between %d and %d." % (port - 10, port), file=__import__("sys").stderr)
+    raise SystemExit(1)
 
 
 if __name__ == "__main__":

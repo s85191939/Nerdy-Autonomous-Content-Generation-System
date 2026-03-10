@@ -22,6 +22,6 @@ if [ -z "${GEMINI_API_KEY:-}" ] && [ -z "${GOOGLE_API_KEY:-}" ] && [ -f "$ROOT/.
   set +a
 fi
 
-echo "Starting web interface at http://127.0.0.1:8080"
+echo "Starting web interface (default http://127.0.0.1:8080; if port is in use, next port will be used)."
 echo "Set GEMINI_API_KEY in .env or environment to run the pipeline."
 exec python -m web.app

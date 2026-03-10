@@ -6,6 +6,7 @@ from ad_engine.config import (
     MAX_ITERATIONS,
     DIMENSION_WEIGHTS,
     DIMENSION_NAMES,
+    FALLBACK_AD,
 )
 
 
@@ -27,3 +28,12 @@ def test_dimension_names_count():
 
 def test_dimension_weights_keys_match_names():
     assert set(DIMENSION_WEIGHTS.keys()) == set(DIMENSION_NAMES)
+
+
+def test_fallback_ad_has_required_keys():
+    """FALLBACK_AD is used when generation fails; must have all ad copy keys."""
+    required = {"primary_text", "headline", "description", "cta"}
+    assert set(FALLBACK_AD.keys()) == required
+    for k in required:
+        assert isinstance(FALLBACK_AD[k], str), f"FALLBACK_AD.{k} must be string"
+        assert len(FALLBACK_AD[k]) > 0, f"FALLBACK_AD.{k} must be non-empty"

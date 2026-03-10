@@ -81,7 +81,7 @@ Documenting design choices, tradeoffs, and limitations for the Autonomous Ad Gen
 
 **Rationale:** Assignment requires "Deterministic with seeds" and reproducible runs for comparison.
 
-**Tradeoff:** Gemini’s actual determinism depends on the API; we document that and use seed for brief order and any local RNG.
+**Tradeoff:** Gemini's actual determinism depends on the API; we document that and use seed for brief order and any local RNG.
 
 ---
 
@@ -96,12 +96,17 @@ Documenting design choices, tradeoffs, and limitations for the Autonomous Ad Gen
 
 ---
 
-## 10. What we did not do (and why)
+## 10. What we did not do (and what we did) — v2 & v3
 
-- **Multi-agent (research/writer/editor/evaluator):** Deferred to v3; single generator + single evaluator is sufficient for 50+ ads and 3+ cycles.
-- **Competitive intelligence / Meta Ad Library:** Deferred to v3; manual study recommended in README.
-- **Image generation:** Out of scope for v1; structure allows a separate creative module later.
-- **Self-healing loops:** Deferred to v3; current loop is fixed max iterations and threshold.
+- **Multi-agent (research/writer/editor/evaluator):** **v3 implemented:** `ad_engine/agents/` provides ResearcherAgent, WriterAgent, EditorAgent, EvaluatorAgent and `run_for_brief_agentic()`; the main pipeline uses IterationEngine (same flow, same components). Agentic orchestration is available for explicit agent-based runs.
+- **Competitive intelligence / Meta Ad Library:** **v3 implemented:** `ad_engine/competitor/insights.py` extracts patterns (hooks, CTAs, tone angles) from competitor ads; `scripts/run_competitive_intel.py` accepts a JSON of ads (exported/copied from Meta Ad Library) and writes `output/competitor_insights.json`. Pipeline loads these insights when generating.
+- **Image generation:** Out of scope for v1; v2 has image generator (Imagen when available).
+- **Visual evaluation (v2):** Implemented as text-based scoring (image concept + ad copy) for brand consistency and engagement potential when an image is generated; no vision API.
+- **A/B variants (v2):** Implemented: `--num-variants` / `num_variants` with distinct creative angles (question/stat/story hook) and `variant_id` / `variant_angle` in export.
+- **Self-healing loops (v3):** **Implemented:** After each run we compare avg score to the previous run; if quality drops by ≥0.5 we write `output/self_heal_suggestion.txt` with a suggested fix (recalibrate or iterate_campaign).
+- **Quality ratchet (v3):** **Implemented:** `ad_engine/metrics/quality_ratchet.py` tracks best avg score so far; evaluation summary includes "Quality ratchet: best so far = X, floor = Y (standards only go UP)."
+- **Performance-per-token (v3):** Already implemented: TokenTracker, run_history.json, ROI dashboard, performance_per_token in PerformanceMetrics.
+- **Agentic orchestration (v3):** See first bullet — Researcher, Writer, Editor, Evaluator agents in `ad_engine/agents/`.
 
 ---
 
@@ -109,20 +114,32 @@ Documenting design choices, tradeoffs, and limitations for the Autonomous Ad Gen
 
 **Decision:** Each LLM call sees only what it needs. Generator: system prompt (brand + format) + single user message (brief or improvement instruction). Evaluator: system prompt (rubrics + confidence) + single user message (ad JSON). No cross-ad context; no long conversation history.
 
-**Rationale:** Keeps costs predictable, avoids context drift, and makes it easy to reason about what each call “knows.” Batch runs are independent per ad.
+**Rationale:** Keeps costs predictable, avoids context drift, and makes it easy to reason about what each call "knows." Batch runs are independent per ad.
 
-**Tradeoff:** We don’t pass “what worked on similar ads” into the generator; that could be a future enhancement.
+**Tradeoff:** We don't pass "what worked on similar ads" into the generator; that could be a future enhancement.
 
 ---
 
-## 12. Failed approaches and where it breaks
+## 12. Human-in-the-loop (when to intervene)
 
-**Honest reflection:** What we tried or considered that didn’t work or would break.
+**Decision:** We do not build an explicit "human approval" gate into the pipeline. Human intervention is expected at these points:
+
+- **Before scaling:** Run `scripts/calibrate_evaluator.py` on reference ads (good/bad) from Slack. If good ads score below 7.0 or bad ads score above, adjust prompts or add reference ads before trusting scores.
+- **After a run:** Review `evaluation_summary.txt` and, if needed, inspect rejected ads in `ads_dataset.json` to spot systematic evaluator drift or bad copy.
+- **When calibration fails:** Add or replace reference ads in `examples/reference_ads_sample.json` and re-run calibration; do not proceed to 50+ ads until the evaluator separates good from bad.
+
+**Rationale:** The spec leaves "When should a human intervene?" as a design choice. We keep the pipeline autonomous for batch runs but document when a human should step in to protect quality (calibration and spot checks).
+
+---
+
+## 13. Failed approaches and where it breaks
+
+**Honest reflection:** What we tried or considered that didn't work or would break.
 
 - **Full ad regeneration every iteration:** We tried a variant that always regenerated from the brief instead of targeted improvement. It used more tokens and often lost good parts of the ad; we switched to targeted regeneration and kept it.
 - **No retries:** Early version had no retries on API errors. Transient rate limits or network blips failed entire runs. We added `with_retry` (exponential backoff) around generator and evaluator calls so the system recovers from transient failures.
-- **Confidence ignored in threshold:** We could gate “publishable” on both score ≥ 7.0 and confidence ≥ 6. We didn’t: threshold is score-only so we don’t over-reject when the model is conservatively uncertain. Confidence is still in the report for human review.
-- **Where it breaks:** If the evaluator consistently scores bad ads high (e.g. generic “we have tutors” copy), the library will accept them. Calibration against reference ads (see `scripts/calibrate_evaluator.py`) is required before trusting scores. If Gemini returns malformed JSON, we raise; we don’t fall back to a default score.
+- **Confidence ignored in threshold:** We could gate "publishable" on both score ≥ 7.0 and confidence ≥ 6. We didn't: threshold is score-only so we don't over-reject when the model is conservatively uncertain. Confidence is still in the report for human review.
+- **Where it breaks:** If the evaluator consistently scores bad ads high (e.g. generic "we have tutors" copy), the library will accept them. Calibration against reference ads (see `scripts/calibrate_evaluator.py`) is required before trusting scores. If Gemini returns malformed JSON, we raise; we don't fall back to a default score.
 
 ---
 

@@ -8,6 +8,7 @@ openai>=1.0.0
 
 # Web interface
 flask>=2.0.0
+gunicorn>=21.0.0
 
 # Data & export
 pandas>=2.0.0

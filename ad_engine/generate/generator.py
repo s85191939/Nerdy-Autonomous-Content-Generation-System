@@ -13,6 +13,8 @@ from ad_engine.generate.prompt_templates import (
     AD_GENERATION_SYSTEM,
     AD_GENERATION_USER,
     IMPROVEMENT_USER,
+    REFERENCE_PATTERNS_SNIPPET,
+    VARIANT_ANGLES,
 )
 from ad_engine.llm import get_llm
 from ad_engine.metrics.token_tracker import usage_from_response
@@ -36,6 +38,14 @@ def _parse_json_from_response(text: str) -> dict:
     return json.loads(text)
 
 
+def _enforce_primary_text_length(ad: dict, max_visible: int = 125) -> None:
+    """Ensure primary text visible portion is at most max_visible chars (Meta spec)."""
+    pt = (ad.get("primary_text") or "").strip()
+    if not pt or len(pt) <= max_visible:
+        return
+    ad["primary_text"] = pt[: max_visible - 3].rstrip() + "..."
+
+
 class AdGenerator:
     """Generate FB/IG ad copy from briefs using Gemini."""
 
@@ -46,26 +56,36 @@ class AdGenerator:
         # GenerationConfig does not support random_seed in current Gemini SDK; seed still used for brief order in CLI
         self._generation_config = None
 
-    def generate(self, brief: dict) -> dict:
-        """Generate one ad from a brief. Brief keys: audience, product, goal, tone."""
+    def generate(self, brief: dict, reference_insights: dict = None, creative_angle: str = None) -> dict:
+        """Generate one ad from a brief. Optional reference_insights, optional creative_angle for A/B variants."""
         try:
-            return self._generate_impl(brief)
+            return self._generate_impl(brief, reference_insights, creative_angle)
         except Exception as e:
             logger.warning("Ad generation failed, using fallback ad: %s", e)
             return dict(FALLBACK_AD)
 
-    def _generate_impl(self, brief: dict) -> dict:
-        """Internal generate; may raise."""
+    def _generate_impl(self, brief: dict, reference_insights: dict = None, creative_angle: str = None) -> dict:
+        system = AD_GENERATION_SYSTEM
+        insights = reference_insights if reference_insights is not None else getattr(self, "_reference_insights", None)
+        if insights and isinstance(insights, dict):
+            hooks = insights.get("hooks") or []
+            ctas = insights.get("ctas") or []
+            angles = insights.get("tone_angles") or []
+            if hooks or ctas or angles:
+                snippet = REFERENCE_PATTERNS_SNIPPET.format(hooks=", ".join(hooks[:5]) or "N/A", ctas=", ".join(ctas[:5]) or "N/A", tone_angles=", ".join(angles[:4]) or "N/A")
+                system = AD_GENERATION_SYSTEM + snippet
+        creative_angle_suffix = ("\nCreative approach for this variant: " + creative_angle) if creative_angle else ""
         user = AD_GENERATION_USER.format(
             audience=brief.get("audience", "Parents of high school students"),
             product=brief.get("product", "SAT tutoring program"),
             goal=brief.get("goal", "conversion"),
             tone=brief.get("tone", "reassuring, results-focused"),
+            creative_angle_suffix=creative_angle_suffix,
         )
 
         def _call():
             return self._model.generate_content(
-                [AD_GENERATION_SYSTEM, user],
+                [system, user],
                 generation_config=self._generation_config,
             )
 
@@ -78,6 +98,7 @@ class AdGenerator:
         for key in ("primary_text", "headline", "description", "cta"):
             if key not in parsed or parsed[key] is None:
                 parsed[key] = FALLBACK_AD.get(key, "")
+        _enforce_primary_text_length(parsed)
         return parsed
 
     def improve(
@@ -120,4 +141,5 @@ class AdGenerator:
         for key in ("primary_text", "headline", "description", "cta"):
             if key not in parsed or parsed[key] is None:
                 parsed[key] = (ad or FALLBACK_AD).get(key, "")
+        _enforce_primary_text_length(parsed)
         return parsed
