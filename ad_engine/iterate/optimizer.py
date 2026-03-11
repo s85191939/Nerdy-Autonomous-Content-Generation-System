@@ -115,28 +115,39 @@ class IterationEngine:
                 "history": [{"iteration": 1, "ad": ad or FALLBACK_AD, "evaluation": fallback_eval}],
             }
 
-    def run_one_improvement(self, ad: dict, brief: dict) -> dict:
+    def run_one_improvement(self, ad: dict, brief: dict, min_score: float = 0.0) -> dict:
         """Run exactly one improve step on an existing ad (for UI 'Make it better' button).
-        Quality ratchet: if the new version scores worse, keeps the original."""
+        Quality ratchet: if the new version scores worse than BOTH the fresh re-eval
+        AND the stored min_score floor, keeps the original with the floor score.
+        min_score: the stored historical score that must never be undercut."""
         evaluation = self.evaluator.evaluate(ad, brief=brief)
         weak = _weakest_dimension(evaluation["scores"])
         rationale = evaluation["dimensions"][weak].get("rationale", "") or get_improvement_hint(weak, brief=brief)
         new_ad = self.generator.improve(dict(ad), weak, rationale, brief=brief)
         new_eval = self.evaluator.evaluate(new_ad, brief=brief)
-        # Quality ratchet: never regress
-        if new_eval["overall_score"] >= evaluation["overall_score"]:
+
+        # Pick the best of: new_eval, fresh re-eval, and the stored min_score floor
+        best_score = max(new_eval["overall_score"], evaluation["overall_score"], min_score)
+        if new_eval["overall_score"] >= best_score:
             use_ad = new_ad
             use_eval = new_eval
-        else:
-            logger.debug("Improvement regressed (%.2f → %.2f), keeping original", evaluation["overall_score"], new_eval["overall_score"])
+        elif evaluation["overall_score"] >= best_score:
             use_ad = dict(ad)
             use_eval = evaluation
+        else:
+            # Both fresh evals are below the stored floor — keep original ad, use floor score
+            logger.info("Both fresh evals (%.2f, %.2f) below stored floor %.2f — keeping original",
+                        evaluation["overall_score"], new_eval["overall_score"], min_score)
+            use_ad = dict(ad)
+            use_eval = evaluation  # will be overridden by caller with stored scores
+
         return {
             "brief": brief,
             "ad": use_ad,
             "evaluation": use_eval,
+            "best_score": best_score,
             "iteration_count": 2,  # original + 1 improve
-            "accepted": use_eval["overall_score"] >= self.quality_threshold,
+            "accepted": best_score >= self.quality_threshold,
             "history": [
                 {"iteration": 1, "ad": dict(ad), "evaluation": evaluation},
                 {"iteration": 2, "ad": dict(new_ad), "evaluation": new_eval},

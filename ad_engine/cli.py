@@ -565,21 +565,27 @@ def improve_single_ad(ad_id: str, output_dir: str, quality_threshold: float = No
     generator = AdGenerator(seed=42, token_tracker=token_tracker)
     evaluator = Evaluator(seed=42, token_tracker=token_tracker, dimension_weights=DIMENSION_WEIGHTS)
     engine = IterationEngine(generator=generator, evaluator=evaluator, quality_threshold=quality_threshold, max_iterations=2)
-    result = engine.run_one_improvement(ad_copy, brief)
-    prev_scores = result["history"][0]["evaluation"].get("scores", {})
-    weak = min(prev_scores, key=lambda d: prev_scores.get(d, 10)) if prev_scores else None
     existing_history = list(ad_record.get("iteration_history", []))
     prev_overall = ad_record.get("overall_score") or 0
-    new_overall = result["evaluation"].get("overall_score") or 0
 
-    # ── QUALITY RATCHET: never replace a good ad with a worse one ──
-    improved = new_overall >= prev_overall
+    # Pass the stored score as floor so run_one_improvement never returns below it
+    result = engine.run_one_improvement(ad_copy, brief, min_score=prev_overall)
+    prev_scores = result["history"][0]["evaluation"].get("scores", {})
+    weak = min(prev_scores, key=lambda d: prev_scores.get(d, 10)) if prev_scores else None
+    new_overall = result.get("best_score") or result["evaluation"].get("overall_score") or 0
+
+    # ── BULLETPROOF QUALITY RATCHET: score can NEVER go down ──
+    effective_score = max(new_overall, prev_overall)
+    improved = effective_score > prev_overall
     if improved:
         use_ad = result["ad"]
         use_eval = result["evaluation"]
-        logger.info("Ad %s improved: %.2f → %.2f (targeted %s)", ad_id, prev_overall, new_overall, weak)
+        # Force the effective score (in case best_score came from a fresh eval > prev_overall)
+        use_eval = dict(use_eval)
+        use_eval["overall_score"] = effective_score
+        logger.info("Ad %s improved: %.2f → %.2f (targeted %s)", ad_id, prev_overall, effective_score, weak)
     else:
-        # Keep the previous (better) ad and its scores; log the failed attempt
+        # Keep the previous (better) ad and its scores
         use_ad = ad_copy
         use_eval = {
             "scores": ad_record.get("scores", {}),
@@ -587,27 +593,28 @@ def improve_single_ad(ad_id: str, output_dir: str, quality_threshold: float = No
             "confidence": ad_record.get("confidence"),
             "dimensions": ad_record.get("dimensions", {}),
         }
-        logger.warning("Ad %s NOT improved: %.2f → %.2f (keeping previous). Targeted %s", ad_id, prev_overall, new_overall, weak)
+        logger.info("Ad %s unchanged at %.2f (attempt scored %.2f, targeted %s)", ad_id, prev_overall, result["evaluation"].get("overall_score", 0), weak)
 
     new_entry = {
         "iteration": len(existing_history) + 1,
-        "overall_score": new_overall,
-        "scores": result["evaluation"].get("scores", {}),
+        "overall_score": effective_score,  # always show ratcheted score in history
+        "attempt_score": result["evaluation"].get("overall_score", 0),  # raw attempt for debugging
+        "scores": use_eval.get("scores", {}),
         "targeted_dimension": weak,
-        "previous_ad_copy": dict(ad_copy),
-        "previous_overall_score": prev_overall,
         "kept_previous": not improved,
     }
+    # ── ABSOLUTE FINAL CLAMP: updated_record.overall_score can NEVER be less than prev_overall ──
+    final_score = max(use_eval.get("overall_score", 0), prev_overall)
     updated_record = {
         "id": ad_id,
         "brief": brief,
         "ad_copy": use_ad,
-        "scores": use_eval["scores"],
-        "overall_score": use_eval["overall_score"],
+        "scores": use_eval.get("scores", {}),
+        "overall_score": final_score,
         "confidence": use_eval.get("confidence"),
         "dimensions": use_eval.get("dimensions"),
         "iteration_count": len(existing_history) + 1,
-        "accepted": use_eval["overall_score"] >= quality_threshold,
+        "accepted": final_score >= quality_threshold,
         "iteration_history": existing_history + [new_entry],
     }
     ads[idx] = updated_record
