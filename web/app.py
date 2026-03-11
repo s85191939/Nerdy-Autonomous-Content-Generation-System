@@ -698,13 +698,17 @@ INDEX_HTML = """
         <p id="progressElapsed" class="text-xs text-slate-400 tabular-nums"></p>
       </div>
       <!-- Stage indicators -->
-      <div id="progressStages" class="mt-4 flex items-center gap-1 text-xs">
+      <div id="progressStages" class="mt-4 flex items-center gap-1 text-xs flex-wrap">
         <span id="stage-generate" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-400">
           <span class="w-1.5 h-1.5 rounded-full bg-current"></span> Generate
         </span>
         <svg class="w-3 h-3 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
         <span id="stage-evaluate" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-400">
           <span class="w-1.5 h-1.5 rounded-full bg-current"></span> Score
+        </span>
+        <svg class="w-3 h-3 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        <span id="stage-improve" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-400">
+          <span class="w-1.5 h-1.5 rounded-full bg-current"></span> Improve
         </span>
         <svg class="w-3 h-3 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
         <span id="stage-done" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-400">
@@ -815,15 +819,17 @@ INDEX_HTML = """
     let runStartTime = null;
     const PAGE_SIZE = 5;
 
+    const stageImprove = document.getElementById('stage-improve');
     function setStage(stage) {
-      // stage: 'generate', 'evaluate', 'done'
-      const stages = { generate: stageGenerate, evaluate: stageEvaluate, done: stageDone };
-      Object.keys(stages).forEach(function(k) {
+      // stage: 'generate', 'evaluate', 'improve', 'done'
+      const stages = { generate: stageGenerate, evaluate: stageEvaluate, improve: stageImprove, done: stageDone };
+      const order = Object.keys(stages);
+      order.forEach(function(k) {
         const el = stages[k];
         if (!el) return;
         if (k === stage) {
           el.className = 'inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary-100 text-primary-700 font-medium pulse-dot';
-        } else if (Object.keys(stages).indexOf(k) < Object.keys(stages).indexOf(stage)) {
+        } else if (order.indexOf(k) < order.indexOf(stage)) {
           el.className = 'inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary-50 text-primary-600';
         } else {
           el.className = 'inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-400';
@@ -908,25 +914,24 @@ INDEX_HTML = """
       }).join('');
       const adId = esc(ad.id || ('ad_' + idx));
       return '<div id="ad-card-' + adId + '" class="ad-card-wrapper">' +
-        '<details class="rounded-xl border border-slate-200 bg-white shadow-sm text-left group" open>' +
-        '<summary class="p-4 cursor-pointer list-none flex items-center justify-between gap-2 flex-wrap">' +
-          (copy.image_path ? '<img src="/api/creatives/' + esc(copy.image_path.replace('creatives/','')) + '" alt="" class="w-12 h-12 rounded object-cover shrink-0">' : '') +
-          '<span class="text-xs font-medium text-slate-400">' + (ad.id || ('Ad ' + (idx + 1))) + '</span>' +
-          '<span class="text-sm font-bold ' + scoreColor(score) + '">Score: ' + score + '</span>' +
-          badge + cycleBadge +
-          '<span class="text-slate-400 text-xs truncate max-w-[200px]">' + headline + '</span>' +
-          '<button type="button" class="improve-ad-btn px-3 py-1.5 rounded-lg bg-primary-600 text-white text-xs font-semibold hover:bg-primary-700 shadow-sm shrink-0 transition-colors" data-ad-id="' + adId + '" onclick="event.preventDefault();event.stopPropagation();">Make it better</button>' +
-        '</summary>' +
-        '<div class="px-4 pb-4 border-t border-slate-100">' +
-          (copy.image_path ? '<div class="mt-3 bg-slate-50 rounded-lg p-3 border border-slate-200"><img src="/api/creatives/' + esc(copy.image_path.replace('creatives/','')) + '" alt="Generated ad creative" class="rounded-lg border border-slate-200 max-h-96 w-full object-contain"><div class="mt-2 flex items-center gap-2"><a href="/api/creatives/' + esc(copy.image_path.replace('creatives/','')) + '?download=1" download class="inline-flex items-center gap-1 text-xs font-medium text-primary-600 hover:text-primary-700 border border-primary-200 rounded-lg px-2.5 py-1.5 hover:bg-primary-50">Download image</a><span class="text-xs text-slate-400">1080x1080 PNG</span></div></div>' : '') +
-          '<h4 class="font-semibold text-slate-900 mt-3 text-base">' + headline + '</h4>' +
-          (primary ? '<p class="text-sm text-slate-700 mt-2 whitespace-pre-wrap">' + primary + '</p>' : '') +
-          (description ? '<p class="text-sm text-slate-600 mt-1">' + description + '</p>' : '') +
-          (cta ? '<p class="text-sm font-medium text-primary-600 mt-2">CTA: ' + cta + '</p>' : '') +
-          (dimRows ? '<div class="mt-4"><p class="text-xs font-semibold text-slate-500 uppercase mb-1">Dimensions</p><table class="w-full text-sm"><tbody>' + dimRows + '</tbody></table></div>' : '') +
-          (histRows ? '<div class="mt-3"><p class="text-xs font-semibold text-slate-500 uppercase mb-1">Iteration history</p><table class="w-full text-sm"><thead><tr><th class="text-left pr-2">Cycle</th><th class="text-left pr-2">Score</th><th class="text-left">Targeted</th></tr></thead><tbody>' + histRows + '</tbody></table></div>' : '') +
+        '<div class="rounded-xl border border-slate-200 bg-white shadow-sm text-left">' +
+          '<div class="p-4 flex items-center justify-between gap-2 flex-wrap">' +
+            '<span class="text-xs font-medium text-slate-400">' + (ad.id || ('Ad ' + (idx + 1))) + '</span>' +
+            '<span class="text-sm font-bold ' + scoreColor(score) + '">Score: ' + score + '</span>' +
+            badge + cycleBadge +
+            '<span class="text-slate-400 text-xs truncate max-w-[200px]">' + headline + '</span>' +
+            '<button type="button" class="improve-ad-btn px-3 py-1.5 rounded-lg bg-primary-600 text-white text-xs font-semibold hover:bg-primary-700 shadow-sm shrink-0 transition-colors" data-ad-id="' + adId + '">Make it better</button>' +
+          '</div>' +
+          '<div class="px-4 pb-4 border-t border-slate-100">' +
+            (copy.image_path ? '<div class="mt-3 bg-slate-50 rounded-lg p-3 border border-slate-200"><img src="/api/creatives/' + esc(copy.image_path.replace('creatives/','')) + '" alt="Generated ad creative" class="rounded-lg border border-slate-200 max-h-96 w-full object-contain"><div class="mt-2 flex items-center gap-2"><a href="/api/creatives/' + esc(copy.image_path.replace('creatives/','')) + '?download=1" download class="inline-flex items-center gap-1 text-xs font-medium text-primary-600 hover:text-primary-700 border border-primary-200 rounded-lg px-2.5 py-1.5 hover:bg-primary-50">Download image</a><span class="text-xs text-slate-400">1080x1080 PNG</span></div></div>' : '') +
+            '<h4 class="font-semibold text-slate-900 mt-3 text-base">' + headline + '</h4>' +
+            (primary ? '<p class="text-sm text-slate-700 mt-2 whitespace-pre-wrap">' + primary + '</p>' : '') +
+            (description ? '<p class="text-sm text-slate-600 mt-1">' + description + '</p>' : '') +
+            (cta ? '<p class="text-sm font-medium text-primary-600 mt-2">CTA: ' + cta + '</p>' : '') +
+            (dimRows ? '<div class="mt-4"><p class="text-xs font-semibold text-slate-500 uppercase mb-1">Dimensions</p><table class="w-full text-sm"><tbody>' + dimRows + '</tbody></table></div>' : '') +
+            (histRows ? '<div class="mt-3"><p class="text-xs font-semibold text-slate-500 uppercase mb-1">Iteration history</p><table class="w-full text-sm"><thead><tr><th class="text-left pr-2">Cycle</th><th class="text-left pr-2">Score</th><th class="text-left">Targeted</th></tr></thead><tbody>' + histRows + '</tbody></table></div>' : '') +
+          '</div>' +
         '</div>' +
-        '</details>' +
         '</div>';
     }
 
@@ -1005,6 +1010,13 @@ INDEX_HTML = """
           progressFill.classList.add('progress-indeterminate');
           progressFill.style.width = '100%';
           progressPct.textContent = '';
+        } else if (msg.indexOf('Improving') >= 0 || msg.indexOf('improved') >= 0) {
+          setStage('improve');
+          progressTitle.textContent = 'Iterating below-threshold ads...';
+          var pct = Math.round((data.current / total) * 100);
+          progressFill.classList.remove('progress-indeterminate');
+          progressFill.style.width = pct + '%';
+          progressPct.textContent = pct + '% at threshold';
         } else if (msg.indexOf('Evaluat') >= 0 || msg.indexOf('Scor') >= 0) {
           setStage('evaluate');
           progressTitle.textContent = 'Scoring ads...';

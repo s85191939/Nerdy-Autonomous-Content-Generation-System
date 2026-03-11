@@ -21,6 +21,7 @@ from ad_engine.output.visualization import plot_iteration_quality
 from ad_engine.config import QUALITY_THRESHOLD, MAX_ITERATIONS, FALLBACK_AD, DIMENSION_WEIGHTS
 from ad_engine.generate.prompt_templates import VARIANT_ANGLES, build_variant_angles
 from ad_engine.evaluate.dimension_scorer import default_evaluation
+from ad_engine.iterate.improvement_strategies import get_improvement_hint
 from ad_engine.competitor.insights import load_insights
 
 logger = logging.getLogger(__name__)
@@ -143,9 +144,10 @@ def _run_pipeline_body(num_ads, max_iterations, out_dir, seed, progress_callback
     image_generator = ImageGenerator(use_placeholder_on_failure=True) if enable_image_gen else None
     results = [None] * len(tasks)  # preserve order for export
 
-    # ── FAST BATCH PATH: 2 LLM calls total (1 generate + 1 evaluate) ──
-    # Used when max_iterations <= 1 and no image gen — the common fast case.
-    use_batch = (max_iterations <= 1 and not enable_image_gen and num_variants <= 1)
+    # ── FAST BATCH PATH with auto-iteration ──
+    # Generate N ads in one batch, evaluate all, then iterate any below threshold until they pass.
+    MAX_IMPROVE_CYCLES = 10  # safety cap to prevent infinite loops
+    use_batch = (not enable_image_gen and num_variants <= 1)
     if use_batch:
         if progress_callback:
             progress_callback(0, len(tasks), "Generating all ads in one batch...", completed_ad=None)
@@ -153,15 +155,16 @@ def _run_pipeline_body(num_ads, max_iterations, out_dir, seed, progress_callback
             briefs_list = [t[0] for t in tasks]
             ads = generator.generate_batch(briefs_list, count=len(tasks))
             if progress_callback:
-                progress_callback(0, len(tasks), "Evaluating all ads in one batch...", completed_ad=None)
+                progress_callback(0, len(tasks), "Scoring all ads...", completed_ad=None)
             evals = evaluator.evaluate_batch(ads, brief=briefs_list[0])
+            # Build initial results
             for idx in range(len(tasks)):
                 brief = tasks[idx][0]
                 ad = ads[idx] if idx < len(ads) else dict(FALLBACK_AD)
                 ev = evals[idx] if idx < len(evals) else default_evaluation(5.0, dimension_weights)
                 accepted = ev["overall_score"] >= quality_threshold
                 ad_id = f"ad_{idx}"
-                result = {
+                results[idx] = {
                     "brief": brief,
                     "ad": ad,
                     "evaluation": ev,
@@ -170,27 +173,87 @@ def _run_pipeline_body(num_ads, max_iterations, out_dir, seed, progress_callback
                     "history": [{"iteration": 1, "ad": ad, "evaluation": ev}],
                     "_ad_id": ad_id,
                 }
-                results[idx] = result
-                if accepted:
-                    library.add(ad_id=ad_id, brief=brief, ad_copy=ad, scores=ev["scores"], overall_score=ev["overall_score"], iteration_count=1)
-                try:
-                    for dim, data in ev["dimensions"].items():
-                        library.log_evaluation(ad_id, dim, data["score"], data.get("rationale", ""))
-                except Exception as e:
-                    logger.warning("log_evaluation failed for %s: %s", ad_id, e)
                 if progress_callback:
-                    progress_callback(idx + 1, len(tasks), f"Ad {idx + 1}/{len(tasks)} done (score {ev['overall_score']})", completed_ad={
+                    progress_callback(idx + 1, len(tasks), f"Ad {idx + 1}/{len(tasks)} scored ({ev['overall_score']})", completed_ad={
                         "id": ad_id,
                         "ad_copy": ad,
                         "overall_score": ev["overall_score"],
                         "accepted": accepted,
                         "iteration_count": 1,
                     })
+
+            # ── AUTO-ITERATE below-threshold ads until they all pass ──
+            for cycle in range(MAX_IMPROVE_CYCLES):
+                below = [(i, r) for i, r in enumerate(results) if r is not None and not r["accepted"]]
+                if not below:
+                    break  # all ads meet threshold
+                if progress_callback:
+                    progress_callback(
+                        len(tasks) - len(below), len(tasks),
+                        f"Improving {len(below)} ads below threshold (cycle {cycle + 2})...",
+                        completed_ad=None,
+                    )
+                # Improve all below-threshold ads in parallel
+                from concurrent.futures import ThreadPoolExecutor
+                def _improve_one(item):
+                    i, r = item
+                    ad = r["ad"]
+                    brief = r["brief"]
+                    ev = r["evaluation"]
+                    scores = ev.get("scores", {})
+                    weak = min(scores, key=lambda d: scores.get(d, 10)) if scores else "clarity"
+                    rationale = ev.get("dimensions", {}).get(weak, {}).get("rationale", "") or get_improvement_hint(weak, brief=brief)
+                    new_ad = generator.improve(dict(ad), weak, rationale, brief=brief)
+                    new_ev = evaluator.evaluate(new_ad, brief=brief)
+                    return (i, new_ad, new_ev, weak)
+
+                with ThreadPoolExecutor(max_workers=min(len(below), 8)) as executor:
+                    futures = [executor.submit(_improve_one, item) for item in below]
+                    for f in futures:
+                        try:
+                            i, new_ad, new_ev, weak = f.result()
+                        except Exception as e:
+                            logger.warning("Improve failed for ad %d: %s", i, e)
+                            continue
+                        r = results[i]
+                        iter_num = r["iteration_count"] + 1
+                        accepted = new_ev["overall_score"] >= quality_threshold
+                        r["ad"] = new_ad
+                        r["evaluation"] = new_ev
+                        r["iteration_count"] = iter_num
+                        r["accepted"] = accepted
+                        r["history"].append({"iteration": iter_num, "ad": new_ad, "evaluation": new_ev})
+                        if progress_callback:
+                            progress_callback(
+                                len(tasks) - len([(ii, rr) for ii, rr in enumerate(results) if rr and not rr["accepted"]]),
+                                len(tasks),
+                                f"Ad {i} improved: {new_ev['overall_score']} (was {r['history'][-2]['evaluation']['overall_score']}, targeted {weak})",
+                                completed_ad={
+                                    "id": r["_ad_id"],
+                                    "ad_copy": new_ad,
+                                    "overall_score": new_ev["overall_score"],
+                                    "accepted": accepted,
+                                    "iteration_count": iter_num,
+                                },
+                            )
+
+            # Log to library
+            for r in results:
+                if r is None:
+                    continue
+                ev = r["evaluation"]
+                try:
+                    library.add(ad_id=r["_ad_id"], brief=r["brief"], ad_copy=r["ad"], scores=ev["scores"], overall_score=ev["overall_score"], iteration_count=r["iteration_count"])
+                    for dim, data in ev["dimensions"].items():
+                        library.log_evaluation(r["_ad_id"], dim, data["score"], data.get("rationale", ""))
+                except Exception as e:
+                    logger.warning("log_evaluation failed for %s: %s", r["_ad_id"], e)
+
         except Exception as batch_err:
             logger.warning("Batch path failed, falling back to per-ad: %s", batch_err)
             use_batch = False  # fall through to per-ad path
 
-    # ── PER-AD PATH: used when iteration is needed or batch failed ──
+    # ── PER-AD PATH: used when image gen is enabled or batch failed ──
     if not use_batch:
         def _process_one(args):
             idx, (brief, variant_idx, variant_suffix) = args
