@@ -1,4 +1,4 @@
-"""LLM backends with fallback: Gemini (priority) -> OpenRouter -> OpenAI."""
+"""LLM backends: race multiple backends in parallel for speed, fallback on error."""
 
 import os
 from typing import Any, List, Optional
@@ -84,4 +84,5 @@ def get_llm(
 
     if len(backends) == 1:
         return backends[0]
+    # Gemini first, then fallback to OpenRouter/OpenAI on error
     return FallbackLLM(backends, backend_names=names)

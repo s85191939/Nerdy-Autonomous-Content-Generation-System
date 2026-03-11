@@ -143,88 +143,105 @@ def _run_pipeline_body(num_ads, max_iterations, out_dir, seed, progress_callback
     image_generator = ImageGenerator(use_placeholder_on_failure=True) if enable_image_gen else None
     results = [None] * len(tasks)  # preserve order for export
 
-    def _process_one(args):
-        idx, (brief, variant_idx, variant_suffix) = args
-        ad_id = f"ad_{idx}{variant_suffix}"
-        creative_angle = variant_angles[variant_idx % len(variant_angles)] if num_variants > 1 else None
+    # ── FAST BATCH PATH: 2 LLM calls total (1 generate + 1 evaluate) ──
+    # Used when max_iterations <= 1 and no image gen — the common fast case.
+    use_batch = (max_iterations <= 1 and not enable_image_gen and num_variants <= 1)
+    if use_batch:
+        if progress_callback:
+            progress_callback(0, len(tasks), "Generating all ads in one batch...", completed_ad=None)
         try:
-            result = engine.run_for_brief(brief, creative_angle=creative_angle)
-            if image_generator is not None:
-                try:
-                    img_path = image_generator.generate(brief, result["ad"], out_dir, ad_id)
-                    if img_path is not None:
-                        result["ad"] = dict(result["ad"])
-                        result["ad"]["image_path"] = img_path.name  # just the filename e.g. "ad_0.png"
-                        try:
-                            visual_scores = evaluate_visual(brief, result["ad"], img_path, token_tracker)
-                            if visual_scores:
-                                result["ad"]["visual_scores"] = visual_scores
-                        except Exception as ve:
-                            logger.debug("Visual evaluation skipped for %s: %s", ad_id, ve)
-                except Exception as img_err:
-                    logger.debug("Image generation skipped for %s: %s", ad_id, img_err)
-            if num_variants > 1:
-                result["ad"] = dict(result["ad"])
-                result["ad"]["variant_id"] = variant_idx
-                result["ad"]["variant_angle"] = (creative_angle[:50] + "...") if creative_angle and len(creative_angle) > 50 else creative_angle
-            result["_ad_id"] = ad_id
-            return (idx, result)
-        except Exception as e:
-            logger.warning("Pipeline step failed for ad %s: %s. Using fallback result.", ad_id, e)
-            fallback_eval = default_evaluation(5.0)
-            return (idx, {
-                "brief": brief,
-                "ad": dict(FALLBACK_AD),
-                "evaluation": fallback_eval,
-                "iteration_count": 0,
-                "accepted": False,
-                "history": [{"iteration": 1, "ad": dict(FALLBACK_AD), "evaluation": fallback_eval}],
-                "_ad_id": ad_id,
-            })
-
-    if concurrency <= 1:
-        for idx, (brief, variant_idx, variant_suffix) in enumerate(tasks):
+            briefs_list = [t[0] for t in tasks]
+            ads = generator.generate_batch(briefs_list, count=len(tasks))
             if progress_callback:
-                progress_callback(idx + 1, len(tasks), f"Processing ad {idx + 1}/{len(tasks)} ...", completed_ad=None)
-            elif (idx + 1) % 10 == 0 or idx == 0:
-                print(f"Processing ad {idx + 1}/{len(tasks)} ...", file=sys.stderr)
-            _, result = _process_one((idx, (brief, variant_idx, variant_suffix)))
-            results[idx] = result
-            ev = result["evaluation"]
-            if progress_callback:
-                progress_callback(idx + 1, len(tasks), f"Ad {idx + 1}/{len(tasks)} done (score {ev['overall_score']})", completed_ad={
-                    "id": result["_ad_id"],
-                    "ad_copy": result["ad"],
-                    "overall_score": ev["overall_score"],
-                    "accepted": result["accepted"],
-                    "iteration_count": result["iteration_count"],
-                })
-            if result["accepted"]:
-                library.add(ad_id=result["_ad_id"], brief=result["brief"], ad_copy=result["ad"], scores=ev["scores"], overall_score=ev["overall_score"], iteration_count=result["iteration_count"])
-            try:
-                for dim, data in ev["dimensions"].items():
-                    library.log_evaluation(result["_ad_id"], dim, data["score"], data.get("rationale", ""))
-            except Exception as e:
-                logger.warning("log_evaluation failed for %s: %s", result["_ad_id"], e)
-    else:
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        completed_count = [0]  # list so closure can mutate
-        with ThreadPoolExecutor(max_workers=concurrency) as executor:
-            future_to_idx = {executor.submit(_process_one, (idx, (brief, variant_idx, variant_suffix))): idx for idx, (brief, variant_idx, variant_suffix) in enumerate(tasks)}
-            for future in as_completed(future_to_idx):
-                idx = future_to_idx[future]
+                progress_callback(0, len(tasks), "Evaluating all ads in one batch...", completed_ad=None)
+            evals = evaluator.evaluate_batch(ads, brief=briefs_list[0])
+            for idx in range(len(tasks)):
+                brief = tasks[idx][0]
+                ad = ads[idx] if idx < len(ads) else dict(FALLBACK_AD)
+                ev = evals[idx] if idx < len(evals) else default_evaluation(5.0, dimension_weights)
+                accepted = ev["overall_score"] >= quality_threshold
+                ad_id = f"ad_{idx}"
+                result = {
+                    "brief": brief,
+                    "ad": ad,
+                    "evaluation": ev,
+                    "iteration_count": 1,
+                    "accepted": accepted,
+                    "history": [{"iteration": 1, "ad": ad, "evaluation": ev}],
+                    "_ad_id": ad_id,
+                }
+                results[idx] = result
+                if accepted:
+                    library.add(ad_id=ad_id, brief=brief, ad_copy=ad, scores=ev["scores"], overall_score=ev["overall_score"], iteration_count=1)
                 try:
-                    _, result = future.result()
+                    for dim, data in ev["dimensions"].items():
+                        library.log_evaluation(ad_id, dim, data["score"], data.get("rationale", ""))
                 except Exception as e:
-                    brief, variant_idx, variant_suffix = tasks[idx]
-                    ad_id = f"ad_{idx}{variant_suffix}"
-                    fallback_eval = default_evaluation(5.0)
-                    result = {"brief": brief, "ad": dict(FALLBACK_AD), "evaluation": fallback_eval, "iteration_count": 0, "accepted": False, "history": [{"iteration": 1, "ad": dict(FALLBACK_AD), "evaluation": fallback_eval}], "_ad_id": ad_id}
+                    logger.warning("log_evaluation failed for %s: %s", ad_id, e)
+                if progress_callback:
+                    progress_callback(idx + 1, len(tasks), f"Ad {idx + 1}/{len(tasks)} done (score {ev['overall_score']})", completed_ad={
+                        "id": ad_id,
+                        "ad_copy": ad,
+                        "overall_score": ev["overall_score"],
+                        "accepted": accepted,
+                        "iteration_count": 1,
+                    })
+        except Exception as batch_err:
+            logger.warning("Batch path failed, falling back to per-ad: %s", batch_err)
+            use_batch = False  # fall through to per-ad path
+
+    # ── PER-AD PATH: used when iteration is needed or batch failed ──
+    if not use_batch:
+        def _process_one(args):
+            idx, (brief, variant_idx, variant_suffix) = args
+            ad_id = f"ad_{idx}{variant_suffix}"
+            creative_angle = variant_angles[variant_idx % len(variant_angles)] if num_variants > 1 else None
+            try:
+                result = engine.run_for_brief(brief, creative_angle=creative_angle)
+                if image_generator is not None:
+                    try:
+                        img_path = image_generator.generate(brief, result["ad"], out_dir, ad_id)
+                        if img_path is not None:
+                            result["ad"] = dict(result["ad"])
+                            result["ad"]["image_path"] = img_path.name
+                            try:
+                                visual_scores = evaluate_visual(brief, result["ad"], img_path, token_tracker)
+                                if visual_scores:
+                                    result["ad"]["visual_scores"] = visual_scores
+                            except Exception as ve:
+                                logger.debug("Visual evaluation skipped for %s: %s", ad_id, ve)
+                    except Exception as img_err:
+                        logger.debug("Image generation skipped for %s: %s", ad_id, img_err)
+                if num_variants > 1:
+                    result["ad"] = dict(result["ad"])
+                    result["ad"]["variant_id"] = variant_idx
+                    result["ad"]["variant_angle"] = (creative_angle[:50] + "...") if creative_angle and len(creative_angle) > 50 else creative_angle
+                result["_ad_id"] = ad_id
+                return (idx, result)
+            except Exception as e:
+                logger.warning("Pipeline step failed for ad %s: %s. Using fallback result.", ad_id, e)
+                fallback_eval = default_evaluation(5.0)
+                return (idx, {
+                    "brief": brief,
+                    "ad": dict(FALLBACK_AD),
+                    "evaluation": fallback_eval,
+                    "iteration_count": 0,
+                    "accepted": False,
+                    "history": [{"iteration": 1, "ad": dict(FALLBACK_AD), "evaluation": fallback_eval}],
+                    "_ad_id": ad_id,
+                })
+
+        if concurrency <= 1:
+            for idx, (brief, variant_idx, variant_suffix) in enumerate(tasks):
+                if progress_callback:
+                    progress_callback(idx + 1, len(tasks), f"Processing ad {idx + 1}/{len(tasks)} ...", completed_ad=None)
+                elif (idx + 1) % 10 == 0 or idx == 0:
+                    print(f"Processing ad {idx + 1}/{len(tasks)} ...", file=sys.stderr)
+                _, result = _process_one((idx, (brief, variant_idx, variant_suffix)))
                 results[idx] = result
                 ev = result["evaluation"]
-                completed_count[0] += 1
                 if progress_callback:
-                    progress_callback(completed_count[0], len(tasks), f"Ad {completed_count[0]}/{len(tasks)} done (score {ev['overall_score']})", completed_ad={
+                    progress_callback(idx + 1, len(tasks), f"Ad {idx + 1}/{len(tasks)} done (score {ev['overall_score']})", completed_ad={
                         "id": result["_ad_id"],
                         "ad_copy": result["ad"],
                         "overall_score": ev["overall_score"],
@@ -238,6 +255,38 @@ def _run_pipeline_body(num_ads, max_iterations, out_dir, seed, progress_callback
                         library.log_evaluation(result["_ad_id"], dim, data["score"], data.get("rationale", ""))
                 except Exception as e:
                     logger.warning("log_evaluation failed for %s: %s", result["_ad_id"], e)
+        else:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            completed_count = [0]
+            with ThreadPoolExecutor(max_workers=concurrency) as executor:
+                future_to_idx = {executor.submit(_process_one, (idx, (brief, variant_idx, variant_suffix))): idx for idx, (brief, variant_idx, variant_suffix) in enumerate(tasks)}
+                for future in as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    try:
+                        _, result = future.result()
+                    except Exception as e:
+                        brief, variant_idx, variant_suffix = tasks[idx]
+                        ad_id = f"ad_{idx}{variant_suffix}"
+                        fallback_eval = default_evaluation(5.0)
+                        result = {"brief": brief, "ad": dict(FALLBACK_AD), "evaluation": fallback_eval, "iteration_count": 0, "accepted": False, "history": [{"iteration": 1, "ad": dict(FALLBACK_AD), "evaluation": fallback_eval}], "_ad_id": ad_id}
+                    results[idx] = result
+                    ev = result["evaluation"]
+                    completed_count[0] += 1
+                    if progress_callback:
+                        progress_callback(completed_count[0], len(tasks), f"Ad {completed_count[0]}/{len(tasks)} done (score {ev['overall_score']})", completed_ad={
+                            "id": result["_ad_id"],
+                            "ad_copy": result["ad"],
+                            "overall_score": ev["overall_score"],
+                            "accepted": result["accepted"],
+                            "iteration_count": result["iteration_count"],
+                        })
+                    if result["accepted"]:
+                        library.add(ad_id=result["_ad_id"], brief=result["brief"], ad_copy=result["ad"], scores=ev["scores"], overall_score=ev["overall_score"], iteration_count=result["iteration_count"])
+                    try:
+                        for dim, data in ev["dimensions"].items():
+                            library.log_evaluation(result["_ad_id"], dim, data["score"], data.get("rationale", ""))
+                    except Exception as e:
+                        logger.warning("log_evaluation failed for %s: %s", result["_ad_id"], e)
 
     # Build list for export (all generated, with scores and iteration history)
     export_ads = []

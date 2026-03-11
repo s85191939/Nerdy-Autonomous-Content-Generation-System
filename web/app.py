@@ -60,7 +60,7 @@ def api_run():
         return jsonify({"ok": False, "error": "A run is already in progress"}), 409
     data = request.get_json(force=True, silent=True) or {}
     num_ads = min(max(1, int(data.get("num_ads", 5))), 100)
-    max_iterations = min(max(1, int(data.get("max_iterations", 6))), 10)
+    max_iterations = min(max(1, int(data.get("max_iterations", 1))), 10)
     seed = int(data.get("seed", 42))
     enable_image_gen = bool(data.get("enable_image_gen"))
     quality_threshold = data.get("quality_threshold")
@@ -89,13 +89,16 @@ def api_run():
     api_key = (data.get("api_key") or "").strip()
     openrouter_key = (data.get("openrouter_api_key") or "").strip()
     openrouter_model = (data.get("openrouter_model") or "").strip() or "openrouter/free"
+    openai_key = (data.get("openai_api_key") or "").strip()
     if api_key:
         os.environ["GEMINI_API_KEY"] = api_key
     # Only override OpenRouter from form when user actually entered a key (full key in .env used when blank)
     if openrouter_key:
         os.environ["OPENROUTER_API_KEY"] = openrouter_key
         os.environ["OPENROUTER_MODEL"] = openrouter_model
-    # Fallback order: Gemini first, then OpenRouter, then OpenAI (each used only if its key is set)
+    if openai_key:
+        os.environ["OPENAI_API_KEY"] = openai_key
+    # Racing: when multiple keys are set, backends race in parallel for speed
 
     _run_state.update(
         status="running",
@@ -121,7 +124,7 @@ def api_run():
                 dimension_weights=dimension_weights,
                 num_variants=1,
                 enable_image_gen=enable_image_gen,
-                concurrency=2,
+                concurrency=4,
             )
             _run_state["status"] = "done"
             _run_state["current"] = num_ads
@@ -490,6 +493,27 @@ INDEX_HTML = """
       .progress-fill { transition: width 0.3s ease-out; }
     }
   </style>
+  <style>
+    @keyframes shimmer {
+      0% { background-position: -200% 0; }
+      100% { background-position: 200% 0; }
+    }
+    .progress-indeterminate {
+      background: linear-gradient(90deg, #10b981 25%, #34d399 50%, #10b981 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    .pulse-dot { animation: pulse-dot 1s ease-in-out infinite; }
+    @keyframes spin-slow {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .spin-slow { animation: spin-slow 1.5s linear infinite; }
+  </style>
 </head>
 <body class="min-h-screen bg-surface-50 text-slate-800 font-sans antialiased">
   <!-- Header -->
@@ -595,7 +619,7 @@ INDEX_HTML = """
             <div class="grid grid-cols-2 gap-4">
               <div>
                 <label for="max_iterations" class="block text-sm font-medium text-slate-700 mb-1.5">Max iterations</label>
-                <input type="number" id="max_iterations" name="max_iterations" value="6" min="1" max="10"
+                <input type="number" id="max_iterations" name="max_iterations" value="1" min="1" max="10"
                   class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
               </div>
               <div>
@@ -611,6 +635,11 @@ INDEX_HTML = """
                 <div>
                   <label for="api_key" class="block text-sm font-medium text-slate-600 mb-1">Gemini API key</label>
                   <input type="password" id="api_key" name="api_key" placeholder="Optional — uses .env" autocomplete="off"
+                    class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
+                </div>
+                <div>
+                  <label for="openai_api_key" class="block text-sm font-medium text-slate-600 mb-1">OpenAI API key <span class="text-slate-400 font-normal">(adds speed — races Gemini + OpenAI in parallel)</span></label>
+                  <input type="password" id="openai_api_key" name="openai_api_key" placeholder="Optional — uses .env" autocomplete="off"
                     class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -650,13 +679,36 @@ INDEX_HTML = """
     <!-- Progress (hidden by default) -->
     <section id="progressCard" class="hidden bg-white rounded-2xl shadow-sm border border-slate-200/80 p-6 mb-6">
       <div class="flex items-center justify-between mb-3">
-        <h3 class="text-sm font-semibold text-slate-700">Generating ads</h3>
+        <div class="flex items-center gap-2">
+          <svg id="progressSpinner" class="w-5 h-5 text-primary-500 spin-slow" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          <h3 id="progressTitle" class="text-sm font-semibold text-slate-700">Generating ads</h3>
+        </div>
         <span id="progressPct" class="text-sm font-medium text-primary-600">0%</span>
       </div>
-      <div class="h-2 bg-slate-100 rounded-full overflow-hidden">
+      <div class="h-2.5 bg-slate-100 rounded-full overflow-hidden">
         <div id="progressFill" class="progress-fill h-full bg-primary-500 rounded-full" style="width:0%"></div>
       </div>
-      <p id="progressText" class="text-sm text-slate-500 mt-2">—</p>
+      <div class="flex items-center justify-between mt-2">
+        <p id="progressText" class="text-sm text-slate-500">—</p>
+        <p id="progressElapsed" class="text-xs text-slate-400 tabular-nums"></p>
+      </div>
+      <!-- Stage indicators -->
+      <div id="progressStages" class="mt-4 flex items-center gap-1 text-xs">
+        <span id="stage-generate" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-400">
+          <span class="w-1.5 h-1.5 rounded-full bg-current"></span> Generate
+        </span>
+        <svg class="w-3 h-3 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        <span id="stage-evaluate" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-400">
+          <span class="w-1.5 h-1.5 rounded-full bg-current"></span> Score
+        </span>
+        <svg class="w-3 h-3 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        <span id="stage-done" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-400">
+          <span class="w-1.5 h-1.5 rounded-full bg-current"></span> Done
+        </span>
+      </div>
       <div id="liveAdsWrap" class="mt-6 pt-4 border-t border-slate-100">
         <h4 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Ads created so far</h4>
         <div id="liveAdsList" class="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-96 overflow-y-auto"></div>
@@ -737,6 +789,11 @@ INDEX_HTML = """
     const progressFill = document.getElementById('progressFill');
     const progressPct = document.getElementById('progressPct');
     const progressText = document.getElementById('progressText');
+    const progressElapsed = document.getElementById('progressElapsed');
+    const progressTitle = document.getElementById('progressTitle');
+    const stageGenerate = document.getElementById('stage-generate');
+    const stageEvaluate = document.getElementById('stage-evaluate');
+    const stageDone = document.getElementById('stage-done');
     const resultCard = document.getElementById('resultCard');
     const resultBody = document.getElementById('resultBody');
     const resultError = document.getElementById('resultError');
@@ -753,7 +810,31 @@ INDEX_HTML = """
     let pollTimer = null;
     let allCompletedAds = [];
     let currentPage = 1;
+    let runStartTime = null;
     const PAGE_SIZE = 5;
+
+    function setStage(stage) {
+      // stage: 'generate', 'evaluate', 'done'
+      const stages = { generate: stageGenerate, evaluate: stageEvaluate, done: stageDone };
+      Object.keys(stages).forEach(function(k) {
+        const el = stages[k];
+        if (!el) return;
+        if (k === stage) {
+          el.className = 'inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary-100 text-primary-700 font-medium pulse-dot';
+        } else if (Object.keys(stages).indexOf(k) < Object.keys(stages).indexOf(stage)) {
+          el.className = 'inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary-50 text-primary-600';
+        } else {
+          el.className = 'inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-400';
+        }
+      });
+    }
+
+    function updateElapsed() {
+      if (!runStartTime || !progressElapsed) return;
+      const secs = Math.round((Date.now() - runStartTime) / 1000);
+      if (secs < 60) progressElapsed.textContent = secs + 's';
+      else progressElapsed.textContent = Math.floor(secs / 60) + 'm ' + (secs % 60) + 's';
+    }
 
     function esc(s) {
       if (s == null || s === undefined) return '';
@@ -877,6 +958,18 @@ INDEX_HTML = """
 
     function showProgress(show) {
       progressCard.classList.toggle('hidden', !show);
+      if (show) {
+        runStartTime = Date.now();
+        setStage('generate');
+        progressFill.classList.add('progress-indeterminate');
+        progressFill.style.width = '100%';
+        progressPct.textContent = '';
+        progressTitle.textContent = 'Generating ads...';
+        progressText.textContent = 'Sending to AI model...';
+      } else {
+        runStartTime = null;
+        progressFill.classList.remove('progress-indeterminate');
+      }
     }
     function showResult(show) {
       resultCard.classList.toggle('hidden', !show);
@@ -893,12 +986,35 @@ INDEX_HTML = """
     }
 
     function poll() {
+      updateElapsed();
       fetch('/api/status').then(r => r.json()).then(data => {
         const total = data.total || 1;
-        const pct = Math.round((data.current / total) * 100);
-        progressFill.style.width = pct + '%';
-        progressPct.textContent = pct + '%';
-        progressText.textContent = data.message || data.current + ' / ' + data.total;
+        const msg = data.message || '';
+
+        // Detect stage from message and update UI
+        if (msg.indexOf('Generating') >= 0 || msg.indexOf('Starting') >= 0 || msg.indexOf('Sending') >= 0) {
+          setStage('generate');
+          progressTitle.textContent = 'Generating ads...';
+          progressFill.classList.add('progress-indeterminate');
+          progressFill.style.width = '100%';
+          progressPct.textContent = '';
+        } else if (msg.indexOf('Evaluat') >= 0 || msg.indexOf('Scor') >= 0) {
+          setStage('evaluate');
+          progressTitle.textContent = 'Scoring ads...';
+          progressFill.classList.add('progress-indeterminate');
+          progressFill.style.width = '100%';
+          progressPct.textContent = '';
+        } else if (data.current > 0) {
+          // Per-ad progress (non-batch mode or ads landing)
+          const pct = Math.round((data.current / total) * 100);
+          progressFill.classList.remove('progress-indeterminate');
+          progressFill.style.width = pct + '%';
+          progressPct.textContent = pct + '%';
+          if (data.current >= total) setStage('done');
+          else setStage('evaluate');
+          progressTitle.textContent = 'Processing ads...';
+        }
+        progressText.textContent = msg || data.current + ' / ' + data.total;
 
         if (data.status === 'running' && data.completed_ads) {
           renderLiveAds(data.completed_ads);
@@ -1037,10 +1153,11 @@ INDEX_HTML = """
     form.addEventListener('submit', function(e) {
       e.preventDefault();
       const api_key = (document.getElementById('api_key') && document.getElementById('api_key').value) ? document.getElementById('api_key').value.trim() : '';
+      const openai_api_key = (document.getElementById('openai_api_key') && document.getElementById('openai_api_key').value) ? document.getElementById('openai_api_key').value.trim() : '';
       const openrouter_api_key = (document.getElementById('openrouter_api_key') && document.getElementById('openrouter_api_key').value) ? document.getElementById('openrouter_api_key').value.trim() : '';
       const openrouter_model = (document.getElementById('openrouter_model') && document.getElementById('openrouter_model').value) ? document.getElementById('openrouter_model').value.trim() : 'openrouter/free';
       const num_ads = parseInt(document.getElementById('num_ads').value, 10) || 5;
-      const max_iterations = parseInt(document.getElementById('max_iterations').value, 10) || 6;
+      const max_iterations = parseInt(document.getElementById('max_iterations').value, 10) || 1;
       const seed = parseInt(document.getElementById('seed').value, 10) || 42;
       const brand_name = (document.getElementById('brand_name') && document.getElementById('brand_name').value) ? document.getElementById('brand_name').value.trim() : '';
       const audience = (document.getElementById('audience') && document.getElementById('audience').value) ? document.getElementById('audience').value.trim() : '';
@@ -1064,9 +1181,9 @@ INDEX_HTML = """
       fetch('/api/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ api_key: api_key || undefined, openrouter_api_key: openrouter_api_key || undefined, openrouter_model: openrouter_model || undefined, num_ads, max_iterations, seed, quality_threshold: quality_threshold || undefined, enable_image_gen, brand_name: brand_name || undefined, audience: audience || undefined, product: product || undefined, goal: goal || undefined, tone: tone || undefined })
+        body: JSON.stringify({ api_key: api_key || undefined, openai_api_key: openai_api_key || undefined, openrouter_api_key: openrouter_api_key || undefined, openrouter_model: openrouter_model || undefined, num_ads, max_iterations, seed, quality_threshold: quality_threshold || undefined, enable_image_gen, brand_name: brand_name || undefined, audience: audience || undefined, product: product || undefined, goal: goal || undefined, tone: tone || undefined })
       }).then(r => r.json()).then(data => {
-        if (data.ok) pollTimer = setInterval(poll, 500);
+        if (data.ok) pollTimer = setInterval(poll, 300);
         else { runBtn.disabled = false; runLabel.textContent = 'Run generator'; runIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>'; showProgress(false); alert(data.error || 'Failed to start'); }
       }).catch(function() {
         runBtn.disabled = false;

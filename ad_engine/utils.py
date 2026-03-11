@@ -5,9 +5,9 @@ from typing import Callable, TypeVar
 
 T = TypeVar("T")
 
-# Default: 3 attempts, exponential backoff 1s, 2s, 4s
+# Default: 3 attempts, exponential backoff 0.5s, 1s, 2s (fast retries)
 DEFAULT_MAX_RETRIES = 3
-DEFAULT_INITIAL_BACKOFF = 1.0
+DEFAULT_INITIAL_BACKOFF = 0.5
 DEFAULT_BACKOFF_MULTIPLIER = 2.0
 
 

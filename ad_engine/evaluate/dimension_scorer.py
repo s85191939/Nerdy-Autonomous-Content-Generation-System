@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import re
-from typing import Optional
+from typing import List, Optional
 
 from dotenv import load_dotenv
 
@@ -114,8 +114,16 @@ def _get_model():
     return get_llm()
 
 
-def _parse_evaluation(text: str) -> dict:
+def _strip_markdown_fences(text: str) -> str:
+    """Strip markdown code fences from LLM output."""
     text = text.strip()
+    text = re.sub(r"^```(?:json)?\s*\n?", "", text)
+    text = re.sub(r"\n?```\s*$", "", text)
+    return text.strip()
+
+
+def _parse_evaluation(text: str) -> dict:
+    text = _strip_markdown_fences(text)
     match = re.search(r"\{[\s\S]*\}", text)
     if match:
         raw = json.loads(match.group())
@@ -173,6 +181,18 @@ class Evaluator:
         except Exception as e:
             logger.warning("Evaluation failed, using default evaluation: %s", e)
             return default_evaluation(5.0, self._dimension_weights)
+
+    def evaluate_batch(self, ads: List[dict], brief: dict = None) -> List[dict]:
+        """Evaluate multiple ads in parallel using ThreadPoolExecutor.
+        Each ad uses the proven single-ad evaluator. Fast because all N calls run concurrently."""
+        if not ads:
+            return []
+        if len(ads) == 1:
+            return [self.evaluate(ads[0], brief=brief)]
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(len(ads), 8)) as executor:
+            futures = [executor.submit(self.evaluate, ad, brief) for ad in ads]
+            return [f.result() for f in futures]
 
     def _evaluate_impl(self, ad: dict, brief: dict = None) -> dict:
         """Internal evaluate; may raise."""

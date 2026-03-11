@@ -65,12 +65,18 @@ class IterationEngine:
         history = [{"iteration": 1, "ad": ad, "evaluation": evaluation}]
 
         while evaluation["overall_score"] < self.quality_threshold and iteration_count < self.max_iterations:
+            prev_score = evaluation["overall_score"]
             weak = _weakest_dimension(evaluation["scores"])
             rationale = evaluation["dimensions"][weak].get("rationale", "") or get_improvement_hint(weak, brief=brief)
             ad = self.generator.improve(ad, weak, rationale, brief=brief)
             evaluation = self.evaluator.evaluate(ad, brief=brief)
             iteration_count += 1
             history.append({"iteration": iteration_count, "ad": ad, "evaluation": evaluation})
+            # Early stop: if score got worse or barely improved, stop iterating
+            improvement = evaluation["overall_score"] - prev_score
+            if improvement < 0.3 and iteration_count >= 2:
+                logger.debug("Early stop at iteration %d: improvement %.2f < 0.3", iteration_count, improvement)
+                break
 
         accepted = evaluation["overall_score"] >= self.quality_threshold
         return {
@@ -123,12 +129,18 @@ class IterationEngine:
         history = [{"iteration": 1, "ad": dict(ad), "evaluation": evaluation}]
         current_ad = dict(ad)
         while evaluation["overall_score"] < self.quality_threshold and iteration_count < self.max_iterations:
+            prev_score = evaluation["overall_score"]
             weak = _weakest_dimension(evaluation["scores"])
             rationale = evaluation["dimensions"][weak].get("rationale", "") or get_improvement_hint(weak, brief=brief)
             current_ad = self.generator.improve(current_ad, weak, rationale, brief=brief)
             evaluation = self.evaluator.evaluate(current_ad, brief=brief)
             iteration_count += 1
             history.append({"iteration": iteration_count, "ad": dict(current_ad), "evaluation": evaluation})
+            # Early stop: if score got worse or barely improved, stop iterating
+            improvement = evaluation["overall_score"] - prev_score
+            if improvement < 0.3 and iteration_count >= 2:
+                logger.debug("Early stop at iteration %d: improvement %.2f < 0.3", iteration_count, improvement)
+                break
         accepted = evaluation["overall_score"] >= self.quality_threshold
         return {
             "brief": brief,
