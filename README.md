@@ -12,7 +12,7 @@ All submission requirements are at the **repository root** so reviewers can see 
 | Code repository | This repo; `pip install -r requirements.txt` then `python -m ad_engine.cli run --num-ads 50` |
 | Brief technical writeup (1–2 pages) | [TECHNICAL_WRITEUP.md](TECHNICAL_WRITEUP.md) |
 | Documentation of AI tools and prompts | [AI_TOOLS_AND_PROMPTS.md](AI_TOOLS_AND_PROMPTS.md) |
-| Demo video or live walkthrough | [DEMO_WALKTHROUGH.md](DEMO_WALKTHROUGH.md) (script); [DEMO_VIDEO.md](DEMO_VIDEO.md) (video link when ready) |
+| Demo video or live walkthrough | Live demo / recorded walkthrough |
 | Generated ad samples with evaluation scores | [generated_ad_samples.json](generated_ad_samples.json) |
 | Quality improvement metrics and visualizations | [QUALITY_IMPROVEMENT_METRICS.md](QUALITY_IMPROVEMENT_METRICS.md) and `output/` after a run |
 | Decision log (YOUR choices and reasoning) | [DECISION_LOG.md](DECISION_LOG.md) |
@@ -147,7 +147,7 @@ output/         # Generated reports (gitignored)
 
 ## Docs
 
-All submission docs are at repo root: [SUBMISSION_CHECKLIST.md](SUBMISSION_CHECKLIST.md), [TECHNICAL_WRITEUP.md](TECHNICAL_WRITEUP.md), [AI_TOOLS_AND_PROMPTS.md](AI_TOOLS_AND_PROMPTS.md), [DEMO_WALKTHROUGH.md](DEMO_WALKTHROUGH.md), [DEMO_VIDEO.md](DEMO_VIDEO.md), [generated_ad_samples.json](generated_ad_samples.json), [QUALITY_IMPROVEMENT_METRICS.md](QUALITY_IMPROVEMENT_METRICS.md), [DECISION_LOG.md](DECISION_LOG.md).
+All submission docs are at repo root: [SUBMISSION_CHECKLIST.md](SUBMISSION_CHECKLIST.md), [TECHNICAL_WRITEUP.md](TECHNICAL_WRITEUP.md), [AI_TOOLS_AND_PROMPTS.md](AI_TOOLS_AND_PROMPTS.md), [generated_ad_samples.json](generated_ad_samples.json), [QUALITY_IMPROVEMENT_METRICS.md](QUALITY_IMPROVEMENT_METRICS.md), [DECISION_LOG.md](DECISION_LOG.md).
 
 ## License
 
