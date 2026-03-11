@@ -62,9 +62,7 @@ def api_run():
     num_ads = min(max(1, int(data.get("num_ads", 5))), 100)
     max_iterations = min(max(1, int(data.get("max_iterations", 6))), 10)
     seed = int(data.get("seed", 42))
-    num_variants = min(max(1, int(data.get("num_variants", 1))), 5)
     enable_image_gen = bool(data.get("enable_image_gen"))
-    concurrency = min(max(1, int(data.get("concurrency", 1))), 8)
     quality_threshold = data.get("quality_threshold")
     if quality_threshold is not None:
         try:
@@ -102,7 +100,7 @@ def api_run():
     _run_state.update(
         status="running",
         current=0,
-        total=num_ads * num_variants,
+        total=num_ads,
         message="Starting...",
         result=None,
         error=None,
@@ -121,12 +119,12 @@ def api_run():
                 custom_brief=custom_brief,
                 quality_threshold=quality_threshold,
                 dimension_weights=dimension_weights,
-                num_variants=num_variants,
+                num_variants=1,
                 enable_image_gen=enable_image_gen,
-                concurrency=concurrency,
+                concurrency=2,
             )
             _run_state["status"] = "done"
-            _run_state["current"] = num_ads * num_variants
+            _run_state["current"] = num_ads
             _run_state["message"] = "Done."
             _run_state["result"] = result
         except Exception as e:
@@ -594,20 +592,10 @@ INDEX_HTML = """
             Advanced settings
           </summary>
           <div class="mt-4 space-y-5">
-            <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div class="grid grid-cols-2 gap-4">
               <div>
                 <label for="max_iterations" class="block text-sm font-medium text-slate-700 mb-1.5">Max iterations</label>
                 <input type="number" id="max_iterations" name="max_iterations" value="6" min="1" max="10"
-                  class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
-              </div>
-              <div>
-                <label for="num_variants" class="block text-sm font-medium text-slate-700 mb-1.5">A/B variants</label>
-                <input type="number" id="num_variants" name="num_variants" value="1" min="1" max="5"
-                  class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
-              </div>
-              <div>
-                <label for="concurrency" class="block text-sm font-medium text-slate-700 mb-1.5">Parallel ads</label>
-                <input type="number" id="concurrency" name="concurrency" value="2" min="1" max="8"
                   class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
               </div>
               <div>
@@ -1061,9 +1049,7 @@ INDEX_HTML = """
       const tone = (document.getElementById('tone') && document.getElementById('tone').value) ? document.getElementById('tone').value.trim() : '';
       const qualityThresholdEl = document.getElementById('quality_threshold');
       const quality_threshold = qualityThresholdEl && qualityThresholdEl.value ? parseFloat(qualityThresholdEl.value) : undefined;
-      const num_variants = parseInt(document.getElementById('num_variants').value, 10) || 1;
       const enable_image_gen = !!(document.getElementById('enable_image_gen') && document.getElementById('enable_image_gen').checked);
-      const concurrency = Math.min(8, Math.max(1, parseInt(document.getElementById('concurrency').value, 10) || 1));
       runBtn.disabled = true;
       runLabel.textContent = 'Running…';
       runIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>';
@@ -1078,7 +1064,7 @@ INDEX_HTML = """
       fetch('/api/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ api_key: api_key || undefined, openrouter_api_key: openrouter_api_key || undefined, openrouter_model: openrouter_model || undefined, num_ads, max_iterations, seed, quality_threshold: quality_threshold || undefined, num_variants, enable_image_gen, concurrency, brand_name: brand_name || undefined, audience: audience || undefined, product: product || undefined, goal: goal || undefined, tone: tone || undefined })
+        body: JSON.stringify({ api_key: api_key || undefined, openrouter_api_key: openrouter_api_key || undefined, openrouter_model: openrouter_model || undefined, num_ads, max_iterations, seed, quality_threshold: quality_threshold || undefined, enable_image_gen, brand_name: brand_name || undefined, audience: audience || undefined, product: product || undefined, goal: goal || undefined, tone: tone || undefined })
       }).then(r => r.json()).then(data => {
         if (data.ok) pollTimer = setInterval(poll, 500);
         else { runBtn.disabled = false; runLabel.textContent = 'Run generator'; runIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>'; showProgress(false); alert(data.error || 'Failed to start'); }

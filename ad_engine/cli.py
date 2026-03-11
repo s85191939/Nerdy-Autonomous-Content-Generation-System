@@ -1,6 +1,5 @@
-"""CLI: run pipeline, export reports."""
+"""Pipeline functions for Nerdy Autonomous Ad Engine (web-only)."""
 
-import argparse
 import json
 import logging
 import os
@@ -477,69 +476,3 @@ def improve_single_ad(ad_id: str, output_dir: str, quality_threshold: float = No
     return updated_record
 
 
-def run_cmd(args) -> None:
-    custom_brief = None
-    if any(getattr(args, k, "") for k in ("audience", "product", "goal", "tone", "brand_name")):
-        custom_brief = {
-            "audience": (getattr(args, "audience", None) or "").strip() or "Parents of high school students",
-            "product": (getattr(args, "product", None) or "").strip() or "SAT tutoring program",
-            "goal": (getattr(args, "goal", None) or "").strip() or "conversion",
-            "tone": (getattr(args, "tone", None) or "").strip() or "reassuring, results-focused",
-        }
-        brand_name = (getattr(args, "brand_name", None) or "").strip()
-        if brand_name:
-            custom_brief["brand_name"] = brand_name
-    result = run_pipeline(
-        num_ads=max(1, args.num_ads),
-        max_iterations=args.max_iterations,
-        output_dir=args.output_dir,
-        seed=args.seed,
-        custom_brief=custom_brief,
-        quality_threshold=getattr(args, "quality_threshold", None),
-        num_variants=max(1, getattr(args, "num_variants", 1)),
-    )
-    print(
-        f"Done. Generated {result['num_ads']} ads. Accepted (>= {QUALITY_THRESHOLD}): {result['accepted']}. Output: {result['output_dir']}",
-        file=sys.stderr,
-    )
-
-
-def export_cmd(args) -> None:
-    out_dir = Path(args.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    library = AdLibrary(base_path=out_dir)
-    library.load(prefix="ad_library")
-    ads = library.list_ads()
-    if not ads:
-        print("No ads in library. Run 'run' first.", file=sys.stderr)
-        return
-    export_ads_dataset(ads, out_dir / "ads_dataset.json")
-    export_evaluation_report(ads, out_dir / "evaluation_report.csv")
-    print(f"Exported to {out_dir}", file=sys.stderr)
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Nerdy Autonomous Ad Engine")
-    sub = parser.add_subparsers(dest="command", required=True)
-    run = sub.add_parser("run", help="Generate and evaluate ads from a brief or default briefs")
-    run.add_argument("--num-ads", type=int, default=50, help="Number of ads to generate")
-    run.add_argument("--max-iterations", type=int, default=MAX_ITERATIONS, help="Max iterations per ad")
-    run.add_argument("--seed", type=int, default=42, help="Random seed")
-    run.add_argument("--output-dir", type=str, default="output", help="Output directory")
-    run.add_argument("--audience", type=str, default="", help="Brief: target audience (use with --product and --goal)")
-    run.add_argument("--product", type=str, default="", help="Brief: product or offer")
-    run.add_argument("--goal", type=str, default="", help="Brief: goal (e.g. conversion, awareness)")
-    run.add_argument("--tone", type=str, default="", help="Brief: tone (optional)")
-    run.add_argument("--brand-name", type=str, default="", help="Brief: brand name (custom brand; omit for Varsity Tutors)")
-    run.add_argument("--quality-threshold", type=float, default=None, help="Quality threshold (default 7.0)")
-    run.add_argument("--num-variants", type=int, default=1, help="A/B variants per brief (same brief, different creative approaches)")
-    run.set_defaults(func=run_cmd)
-    exp = sub.add_parser("export", help="Export reports from existing library")
-    exp.add_argument("--output-dir", type=str, default="output", help="Output directory")
-    exp.set_defaults(func=export_cmd)
-    args = parser.parse_args()
-    args.func(args)
-
-
-if __name__ == "__main__":
-    main()

@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# Run Nerdy Autonomous Content Generation System locally.
+# Run Nerdy Autonomous Content Generation System locally (web UI).
 # Usage:
-#   ./scripts/run_local.sh              # default: 50 ads, 6 max iterations
-#   ./scripts/run_local.sh --num-ads 5   # quick test with 5 ads
-#   ./scripts/run_local.sh --help        # show all CLI options
+#   ./scripts/run_local.sh              # launches web UI at http://127.0.0.1:8080
 
 set -e
 cd "$(dirname "$0")/.."
@@ -36,6 +34,6 @@ if [ -z "${GEMINI_API_KEY:-}" ] && [ -z "${GOOGLE_API_KEY:-}" ]; then
   exit 1
 fi
 
-# 4. Run
-echo "Running ad engine..."
-exec python -m ad_engine.cli run --num-ads 50 --max-iterations 6 --seed 42 --output-dir "$ROOT/output" "$@"
+# 4. Launch web UI
+echo "Starting web UI at http://127.0.0.1:8080 ..."
+exec python -c "from web.app import app; app.run(host='0.0.0.0', port=8080, debug=False)"

@@ -68,7 +68,7 @@ def suggest_auto_fix(
     if run_id:
         return {
             "action": "iterate_campaign",
-            "message": f"Run {run_id} had avg {latest_avg:.2f}. Re-iterate with: python -m ad_engine.cli iterate --run-id <run_id> (or run calibrate_evaluator.py first).",
+            "message": f"Run {run_id} had avg {latest_avg:.2f}. Re-iterate from the Dashboard (click 'Improve again') or run calibrate_evaluator.py first.",
             "run_id": run_id,
         }
     return {"action": "recalibrate", "message": "Run calibrate_evaluator.py on reference ads, then re-run pipeline.", "run_id": None}

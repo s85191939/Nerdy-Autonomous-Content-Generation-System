@@ -16,11 +16,10 @@
 
 After running the pipeline:
 
-```bash
-python -m ad_engine.cli run --num-ads 50 --max-iterations 6 --seed 42
-```
+1. Launch the web UI: `./scripts/run_web.sh` → http://127.0.0.1:8080
+2. Enter your brief, set num_ads to 50, and click **Generate ads**
 
-the `output/` directory will contain:
+The `output/` directory will contain:
 
 - `ads_dataset.json` — full ad copy, scores, dimensions (rationales, confidence), iteration_history
 - `evaluation_report.csv` — ad_id, overall_score, iteration_count, per-dimension scores

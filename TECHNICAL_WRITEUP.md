@@ -29,7 +29,7 @@ An autonomous pipeline that generates Facebook and Instagram ad copy for Varsity
 | Autonomous pipeline for FB/IG | Yes — `ad_engine` (generate → evaluate → iterate) |
 | Evaluation framework (5 dimensions) | Yes — LLM-as-judge with rationales and confidence |
 | Quality feedback loop | Yes — weakest-dimension targeting, configurable max iterations |
-| 50+ ads with evaluation scores | Yes — `python -m ad_engine.cli run --num-ads 50` |
+| 50+ ads with evaluation scores | Yes — Web UI at http://127.0.0.1:8080 (set num_ads to 50) |
 | Decision log | Yes — [DECISION_LOG.md](DECISION_LOG.md) |
 | Evaluation report (JSON/CSV + trends) | Yes — `evaluation_report.csv`, `ads_dataset.json`, `evaluation_summary.txt`, quality chart |
 | Code quality | 80+ tests, one-command setup, modular layout, explicit limitations in decision log |
@@ -39,7 +39,6 @@ An autonomous pipeline that generates Facebook and Instagram ad copy for Varsity
 ```bash
 pip install -r requirements.txt
 export GEMINI_API_KEY="your-key"
-./scripts/run_local.sh              # CLI: 50 ads, 6 max iterations
 ./scripts/run_web.sh                 # Web UI at http://127.0.0.1:8080
 ```
 

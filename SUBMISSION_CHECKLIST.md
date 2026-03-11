@@ -2,7 +2,7 @@
 
 All submission requirements are satisfied. Each item is at the **repository root** for easy reviewer access.
 
-- [x] **Code repository (GitHub preferred)** — This repository. Setup: `pip install -r requirements.txt`; run: `python -m ad_engine.cli run --num-ads 50`.
+- [x] **Code repository (GitHub preferred)** — This repository. Setup: `pip install -r requirements.txt`; run: `./scripts/run_web.sh` → http://127.0.0.1:8080.
 - [x] **Brief technical writeup (1–2 pages)** — [TECHNICAL_WRITEUP.md](TECHNICAL_WRITEUP.md)
 - [x] **Documentation of AI tools and prompts used** — [AI_TOOLS_AND_PROMPTS.md](AI_TOOLS_AND_PROMPTS.md)
 - [x] **Demo video or live walkthrough** — Live demo / recorded walkthrough.
