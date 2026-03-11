@@ -226,34 +226,19 @@ _ALLOWED_RUN_OUTPUT_NAMES = ("ads_dataset.json", "evaluation_report.csv", "evalu
 
 @app.route("/api/result/ads_dataset")
 def api_result_ads_dataset():
-    """Return last run's ads_dataset.json for in-UI display (full copy, scores, iteration history).
+    """Return current run's ads_dataset.json for in-UI display (full copy, scores, iteration history).
 
-    Looks in output/ads_dataset.json first, then falls back to the latest run directory.
+    Uses the root output/ads_dataset.json (always overwritten by the latest run).
     """
-    # Find the best (largest) ads_dataset.json across all runs
-    best_path = None
-    best_size = 0
-    runs_dir = ROOT / "output" / "runs"
-    if runs_dir.exists():
-        for run_dir in sorted(runs_dir.iterdir(), reverse=True):
-            cand = run_dir / "ads_dataset.json"
-            if cand.exists():
-                sz = cand.stat().st_size
-                if sz > best_size:
-                    best_size = sz
-                    best_path = cand
-    # Also check root output
     root_path = ROOT / "output" / "ads_dataset.json"
-    if root_path.exists() and root_path.stat().st_size > best_size:
-        best_path = root_path
-    if best_path is None or not best_path.exists():
-        return jsonify([])
-    try:
-        with open(best_path) as f:
-            data = _json.load(f)
-        return jsonify(data if isinstance(data, list) else [])
-    except Exception:
-        return jsonify([])
+    if root_path.exists():
+        try:
+            with open(root_path) as f:
+                data = _json.load(f)
+            return jsonify(data if isinstance(data, list) else [])
+        except Exception:
+            pass
+    return jsonify([])
 
 
 @app.route("/api/result/summary")
@@ -575,15 +560,10 @@ INDEX_HTML = """
             </div>
           </div>
         </div>
-        <!-- v2: Image generation toggle (visible) -->
-        <div class="flex items-center gap-3 rounded-lg bg-blue-50/70 border border-blue-100 p-3">
+        <!-- v2: Image generation toggle (hidden — v1 focus) -->
+        <div class="hidden">
           <input type="checkbox" id="enable_image_gen" name="enable_image_gen" value="1"
             class="rounded border-slate-300 text-primary-600 focus:ring-primary-500 w-4 h-4">
-          <div>
-            <span class="text-sm font-medium text-slate-700">Generate images for each ad</span>
-            <span class="ml-1.5 inline-flex items-center rounded-full bg-blue-100 text-blue-700 text-xs font-medium px-1.5 py-0.5">v2</span>
-            <p class="text-xs text-slate-500 mt-0.5">Uses Imagen to create ad creatives, scored for brand consistency &amp; engagement</p>
-          </div>
         </div>
         <!-- Quick settings + Generate button -->
         <div class="flex flex-col sm:flex-row gap-4 items-end">

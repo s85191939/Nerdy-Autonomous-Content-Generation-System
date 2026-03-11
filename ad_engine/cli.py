@@ -20,7 +20,7 @@ from ad_engine.creative.visual_evaluator import evaluate_visual
 from ad_engine.output.export_reports import export_ads_dataset, export_evaluation_report, export_evaluation_summary
 from ad_engine.output.visualization import plot_iteration_quality
 from ad_engine.config import QUALITY_THRESHOLD, MAX_ITERATIONS, FALLBACK_AD, DIMENSION_WEIGHTS
-from ad_engine.generate.prompt_templates import VARIANT_ANGLES
+from ad_engine.generate.prompt_templates import VARIANT_ANGLES, build_variant_angles
 from ad_engine.evaluate.dimension_scorer import default_evaluation
 from ad_engine.competitor.insights import load_insights
 
