@@ -76,13 +76,16 @@ def api_run():
         dimension_weights = None
     output_dir = str(ROOT / "output")
     custom_brief = None
-    if any(data.get(k) for k in ("audience", "product", "goal", "tone")):
+    if any(data.get(k) for k in ("audience", "product", "goal", "tone", "brand_name")):
         custom_brief = {
             "audience": (data.get("audience") or "").strip() or "Parents of high school students",
             "product": (data.get("product") or "").strip() or "SAT tutoring program",
             "goal": (data.get("goal") or "").strip() or "conversion",
             "tone": (data.get("tone") or "").strip() or "reassuring, results-focused",
         }
+        brand_name = (data.get("brand_name") or "").strip()
+        if brand_name:
+            custom_brief["brand_name"] = brand_name
 
     # Optional: set API keys from request (not persisted; used only for this process)
     api_key = (data.get("api_key") or "").strip()
@@ -181,13 +184,33 @@ def api_output_file(name):
 
 @app.route("/api/creatives/<path:filename>")
 def api_creative_image(filename):
-    """Serve a generated ad image from output/creatives/ (v2 image gen)."""
+    """Serve a generated ad image from output/creatives/ or output/runs/*/creatives/ (v2 image gen)."""
     if ".." in filename or filename.startswith("/"):
         return "Forbidden", 403
+    # Try flat output/creatives/ first
     path = ROOT / "output" / "creatives" / filename
+    if path.exists() and path.is_file():
+        return send_file(path, mimetype="image/png", as_attachment=False)
+    # Try inside run dirs (search latest first)
+    runs_dir = ROOT / "output" / "runs"
+    if runs_dir.exists():
+        for run_dir in sorted(runs_dir.iterdir(), reverse=True):
+            cand = run_dir / "creatives" / filename
+            if cand.exists() and cand.is_file():
+                return send_file(cand, mimetype="image/png", as_attachment=False)
+    return "Not found", 404
+
+
+@app.route("/api/runs/<run_id>/creatives/<path:filename>")
+def api_run_creative_image(run_id, filename):
+    """Serve a generated ad image from a specific run's creatives directory."""
+    if ".." in run_id or "/" in run_id or ".." in filename or filename.startswith("/"):
+        return "Forbidden", 403
+    path = ROOT / "output" / "runs" / run_id / "creatives" / filename
     if not path.exists() or not path.is_file():
         return "Not found", 404
-    return send_file(path, mimetype="image/png", as_attachment=False)
+    download = request.args.get("download", "").lower() in ("1", "true", "yes")
+    return send_file(path, mimetype="image/png", as_attachment=download, download_name=filename if download else None)
 
 
 # --- Result data for in-UI display (so users see what they're downloading) ---
@@ -203,12 +226,30 @@ _ALLOWED_RUN_OUTPUT_NAMES = ("ads_dataset.json", "evaluation_report.csv", "evalu
 
 @app.route("/api/result/ads_dataset")
 def api_result_ads_dataset():
-    """Return last run's ads_dataset.json for in-UI display (full copy, scores, iteration history)."""
-    path = ROOT / "output" / "ads_dataset.json"
-    if not path.exists():
+    """Return last run's ads_dataset.json for in-UI display (full copy, scores, iteration history).
+
+    Looks in output/ads_dataset.json first, then falls back to the latest run directory.
+    """
+    # Find the best (largest) ads_dataset.json across all runs
+    best_path = None
+    best_size = 0
+    runs_dir = ROOT / "output" / "runs"
+    if runs_dir.exists():
+        for run_dir in sorted(runs_dir.iterdir(), reverse=True):
+            cand = run_dir / "ads_dataset.json"
+            if cand.exists():
+                sz = cand.stat().st_size
+                if sz > best_size:
+                    best_size = sz
+                    best_path = cand
+    # Also check root output
+    root_path = ROOT / "output" / "ads_dataset.json"
+    if root_path.exists() and root_path.stat().st_size > best_size:
+        best_path = root_path
+    if best_path is None or not best_path.exists():
         return jsonify([])
     try:
-        with open(path) as f:
+        with open(best_path) as f:
             data = _json.load(f)
         return jsonify(data if isinstance(data, list) else [])
     except Exception:
@@ -501,12 +542,17 @@ INDEX_HTML = """
     <section class="bg-white rounded-2xl shadow-sm border border-slate-200/80 overflow-hidden mb-6">
       <div class="px-6 py-5 border-b border-slate-100">
         <h2 class="text-lg font-semibold text-slate-900">Generate from a brief</h2>
-        <p class="text-sm text-slate-500 mt-0.5">Enter audience, product, and goal to generate ads. Leave blank to use example SAT/Varsity Tutors briefs.</p>
+        <p class="text-sm text-slate-500 mt-0.5">Enter audience, product, and goal to generate ads. Add a brand name for custom brands. Leave blank to use default Varsity Tutors briefs.</p>
       </div>
       <form id="form" class="p-6 space-y-5">
         <div class="bg-slate-50 rounded-lg p-4 border border-slate-200">
           <p class="text-sm font-semibold text-slate-800 mb-3">Brief (audience + product + goal)</p>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label for="brand_name" class="block text-sm font-medium text-slate-700 mb-1">Brand name <span class="text-slate-400 font-normal">(custom brand; leave blank for Varsity Tutors)</span></label>
+              <input type="text" id="brand_name" name="brand_name" placeholder="e.g. MovieMagic, Nike, Acme Corp"
+                class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
+            </div>
             <div>
               <label for="audience" class="block text-sm font-medium text-slate-700 mb-1">Audience</label>
               <input type="text" id="audience" name="audience" placeholder="e.g. Parents of high school juniors"
@@ -809,7 +855,7 @@ INDEX_HTML = """
       }).join('');
       return '<details class="rounded-xl border border-slate-200 bg-white shadow-sm text-left group">' +
         '<summary class="p-4 cursor-pointer list-none flex items-center justify-between gap-2 flex-wrap">' +
-          (copy.image_path ? '<img src="/api/creatives/' + esc(copy.image_path) + '" alt="" class="w-12 h-12 rounded object-cover shrink-0">' : '') +
+          (copy.image_path ? '<img src="/api/creatives/' + esc(copy.image_path.replace('creatives/','')) + '" alt="" class="w-12 h-12 rounded object-cover shrink-0">' : '') +
           '<span class="text-xs font-medium text-slate-400">' + (ad.id || ('Ad ' + (idx + 1))) + '</span>' +
           '<span class="text-sm font-bold ' + scoreColor(score) + '">Score: ' + score + '</span>' +
           badge +
@@ -817,7 +863,7 @@ INDEX_HTML = """
           '<button type="button" class="improve-ad-btn px-2 py-1 rounded-lg border border-primary-500 text-primary-600 text-xs font-medium hover:bg-primary-50 shrink-0" data-ad-id="' + esc(ad.id || ('ad_' + idx)) + '" onclick="event.preventDefault();event.stopPropagation();">Make it better</button>' +
         '</summary>' +
         '<div class="px-4 pb-4 border-t border-slate-100">' +
-          (copy.image_path ? '<div class="mt-3"><img src="/api/creatives/' + esc(copy.image_path) + '" alt="Generated ad creative" class="rounded-lg border border-slate-200 max-h-64 w-auto object-contain"></div>' : '') +
+          (copy.image_path ? '<div class="mt-3 bg-slate-50 rounded-lg p-3 border border-slate-200"><img src="/api/creatives/' + esc(copy.image_path.replace('creatives/','')) + '" alt="Generated ad creative" class="rounded-lg border border-slate-200 max-h-96 w-full object-contain"><div class="mt-2 flex items-center gap-2"><a href="/api/creatives/' + esc(copy.image_path.replace('creatives/','')) + '?download=1" download class="inline-flex items-center gap-1 text-xs font-medium text-primary-600 hover:text-primary-700 border border-primary-200 rounded-lg px-2.5 py-1.5 hover:bg-primary-50">⬇ Download image</a><span class="text-xs text-slate-400">1080×1080 PNG</span></div></div>' : '') +
           '<h4 class="font-semibold text-slate-900 mt-3 text-base">' + headline + '</h4>' +
           (primary ? '<p class="text-sm text-slate-700 mt-2 whitespace-pre-wrap">' + primary + '</p>' : '') +
           (description ? '<p class="text-sm text-slate-600 mt-1">' + description + '</p>' : '') +
@@ -1028,6 +1074,7 @@ INDEX_HTML = """
       const num_ads = parseInt(document.getElementById('num_ads').value, 10) || 5;
       const max_iterations = parseInt(document.getElementById('max_iterations').value, 10) || 6;
       const seed = parseInt(document.getElementById('seed').value, 10) || 42;
+      const brand_name = (document.getElementById('brand_name') && document.getElementById('brand_name').value) ? document.getElementById('brand_name').value.trim() : '';
       const audience = (document.getElementById('audience') && document.getElementById('audience').value) ? document.getElementById('audience').value.trim() : '';
       const product = (document.getElementById('product') && document.getElementById('product').value) ? document.getElementById('product').value.trim() : '';
       const goal = (document.getElementById('goal') && document.getElementById('goal').value) ? document.getElementById('goal').value.trim() : '';
@@ -1051,7 +1098,7 @@ INDEX_HTML = """
       fetch('/api/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ api_key: api_key || undefined, openrouter_api_key: openrouter_api_key || undefined, openrouter_model: openrouter_model || undefined, num_ads, max_iterations, seed, quality_threshold: quality_threshold || undefined, num_variants, enable_image_gen, concurrency, audience: audience || undefined, product: product || undefined, goal: goal || undefined, tone: tone || undefined })
+        body: JSON.stringify({ api_key: api_key || undefined, openrouter_api_key: openrouter_api_key || undefined, openrouter_model: openrouter_model || undefined, num_ads, max_iterations, seed, quality_threshold: quality_threshold || undefined, num_variants, enable_image_gen, concurrency, brand_name: brand_name || undefined, audience: audience || undefined, product: product || undefined, goal: goal || undefined, tone: tone || undefined })
       }).then(r => r.json()).then(data => {
         if (data.ok) pollTimer = setInterval(poll, 500);
         else { runBtn.disabled = false; runLabel.textContent = 'Run generator'; runIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>'; showProgress(false); alert(data.error || 'Failed to start'); }

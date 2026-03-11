@@ -9,7 +9,19 @@ IMPROVEMENT_STRATEGIES = {
 }
 
 
-def get_improvement_hint(weak_dimension: str) -> str:
+def get_improvement_hint(weak_dimension: str, brief: dict = None) -> str:
+    """Return improvement hint — dynamic for custom briefs, default for Varsity Tutors."""
+    if brief and brief.get("brand_name"):
+        if weak_dimension == "brand_voice":
+            brand_name = brief["brand_name"]
+            tone = brief.get("tone", "professional, engaging")
+            return f"Align with {brand_name}: {tone}."
+        if weak_dimension == "emotional_resonance":
+            audience = brief.get("audience", "target audience")
+            return f"Add emotional hook that resonates with {audience}."
+        if weak_dimension == "value_proposition":
+            product = brief.get("product", "product")
+            return f"Strengthen the benefit with a specific outcome for {product}."
     return IMPROVEMENT_STRATEGIES.get(
         weak_dimension,
         f"Improve the dimension: {weak_dimension}.",

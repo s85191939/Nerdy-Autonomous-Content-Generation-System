@@ -34,6 +34,65 @@ VARIANT_ANGLES = [
     "Use a short story or testimonial hook for the first line (e.g. My daughter went from 1050 to 1400 in 8 weeks.).",
 ]
 
+
+# --- Builder functions for custom briefs ---
+
+
+def _is_custom_brief(brief: dict = None) -> bool:
+    """Return True if brief represents a custom (non-Varsity Tutors) brand."""
+    return brief is not None and bool(brief.get("brand_name"))
+
+
+def build_brand_voice(brief: dict = None) -> str:
+    """Return brand voice block — dynamic for custom briefs, default for Varsity Tutors."""
+    if not _is_custom_brief(brief):
+        return DEFAULT_BRAND_VOICE
+    brand_name = brief.get("brand_name", "Brand")
+    tone = brief.get("tone", "professional, engaging")
+    audience = brief.get("audience", "target audience")
+    goal = brief.get("goal", "engagement")
+    return f"""
+Brand: {brand_name}
+Voice: {tone}.
+- Lead with outcomes, not features.
+- Confident but not arrogant.
+- Meet people where they are.
+Primary audience: {audience} — {goal}.
+"""
+
+
+def build_ad_generation_system(brief: dict = None) -> str:
+    """Return system prompt for ad generation — dynamic for custom briefs."""
+    if not _is_custom_brief(brief):
+        return AD_GENERATION_SYSTEM
+    brand_name = brief.get("brand_name", "Brand")
+    product = brief.get("product", "product")
+    brand_voice = build_brand_voice(brief)
+    return f"""You are an expert Facebook and Instagram ad copywriter for {brand_name}, promoting {product}.
+
+{brand_voice}
+
+Ad format for Meta:
+- Primary text: Main copy above the image. First line must hook in ~125 chars. Story-driven: pain → solution → proof → CTA.
+- Headline: Bold, 5–8 words, benefit-driven.
+- Description: Optional reinforcement; often truncated on mobile.
+- CTA: "Learn More" (awareness), "Sign Up" or "Get Started" (conversion).
+
+Output valid JSON only, with keys: primary_text, headline, description, cta."""
+
+
+def build_variant_angles(brief: dict = None) -> list:
+    """Return variant angles — dynamic for custom briefs, default SAT angles otherwise."""
+    if not _is_custom_brief(brief):
+        return VARIANT_ANGLES
+    product = brief.get("product", "product")
+    audience = brief.get("audience", "target audience")
+    return [
+        f"Use a question hook for the first line targeting {audience}.",
+        f"Use a stat or number hook for the first line about {product}.",
+        f"Use a short story or testimonial hook for the first line about {product}.",
+    ]
+
 IMPROVEMENT_USER = """Previous ad:
 {ad_json}
 

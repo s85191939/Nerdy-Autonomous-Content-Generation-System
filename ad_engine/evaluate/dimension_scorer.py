@@ -30,6 +30,28 @@ For each dimension also give a confidence score 1-10: how certain you are about 
 Respond with ONLY a single JSON object. No markdown. Keys: clarity, value_proposition, cta, brand_voice, emotional_resonance. Each value is an object: {"score": <1-10>, "rationale": "<short reason>", "confidence": <1-10>}.
 Example: {"clarity": {"score": 8, "rationale": "Clear hook.", "confidence": 9}, ...}"""
 
+
+def build_evaluation_system(brief: dict = None) -> str:
+    """Return evaluation system prompt — dynamic for custom briefs, default for Varsity Tutors."""
+    if brief is None or not brief.get("brand_name"):
+        return EVALUATION_SYSTEM
+    brand_name = brief.get("brand_name", "Brand")
+    tone = brief.get("tone", "professional, engaging")
+    product = brief.get("product", "product")
+    audience = brief.get("audience", "target audience")
+    return f"""You are an expert ad quality evaluator for Facebook/Instagram ads. Score each ad on a scale of 1-10 for these dimensions:
+
+1. clarity — Is the message understandable in under 3 seconds? (1=confusing, 10=crystal clear)
+2. value_proposition — Does it communicate a specific, compelling benefit for {product}? (1=generic, 10=specific and compelling)
+3. cta — Is the next step clear and compelling? (1=no/vague CTA, 10=specific, low-friction)
+4. brand_voice — Does it sound like {brand_name}: {tone}? (1=generic, 10=distinctly on-brand)
+5. emotional_resonance — Does it connect emotionally with {audience}? (1=flat, 10=taps into real motivation)
+
+For each dimension also give a confidence score 1-10: how certain you are about your score (10=very certain, 1=guessing). Use confidence to signal when the ad is ambiguous or you're uncertain.
+
+Respond with ONLY a single JSON object. No markdown. Keys: clarity, value_proposition, cta, brand_voice, emotional_resonance. Each value is an object: {{"score": <1-10>, "rationale": "<short reason>", "confidence": <1-10>}}.
+Example: {{"clarity": {{"score": 8, "rationale": "Clear hook.", "confidence": 9}}, ...}}"""
+
 EVALUATION_USER = """Ad to evaluate (JSON):
 {ad_json}
 
@@ -92,22 +114,23 @@ class Evaluator:
         # GenerationConfig does not support random_seed in current Gemini SDK
         self._config = None
 
-    def evaluate(self, ad: dict) -> dict:
+    def evaluate(self, ad: dict, brief: dict = None) -> dict:
         """Return dimension scores with rationales, overall_score, and confidence. On failure returns default_evaluation."""
         try:
-            return self._evaluate_impl(ad)
+            return self._evaluate_impl(ad, brief=brief)
         except Exception as e:
             logger.warning("Evaluation failed, using default evaluation: %s", e)
             return default_evaluation(5.0, self._dimension_weights)
 
-    def _evaluate_impl(self, ad: dict) -> dict:
+    def _evaluate_impl(self, ad: dict, brief: dict = None) -> dict:
         """Internal evaluate; may raise."""
+        evaluation_system = build_evaluation_system(brief)
         ad_json = json.dumps(ad, indent=2)
         user = EVALUATION_USER.format(ad_json=ad_json)
 
         def _call():
             return self._model.generate_content(
-                [EVALUATION_SYSTEM, user],
+                [evaluation_system, user],
                 generation_config=self._config,
             )
 

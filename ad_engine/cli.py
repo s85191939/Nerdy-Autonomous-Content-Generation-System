@@ -141,7 +141,7 @@ def _run_pipeline_body(num_ads, max_iterations, out_dir, seed, progress_callback
             for v in range(num_variants):
                 tasks.append((brief, v, f"_v{v}"))
 
-    image_generator = ImageGenerator(use_placeholder_on_failure=False) if enable_image_gen else None
+    image_generator = ImageGenerator(use_placeholder_on_failure=True) if enable_image_gen else None
     results = [None] * len(tasks)  # preserve order for export
 
     def _process_one(args):
@@ -155,7 +155,7 @@ def _run_pipeline_body(num_ads, max_iterations, out_dir, seed, progress_callback
                     img_path = image_generator.generate(brief, result["ad"], out_dir, ad_id)
                     if img_path is not None:
                         result["ad"] = dict(result["ad"])
-                        result["ad"]["image_path"] = str(img_path.relative_to(out_dir))
+                        result["ad"]["image_path"] = img_path.name  # just the filename e.g. "ad_0.png"
                         try:
                             visual_scores = evaluate_visual(brief, result["ad"], img_path, token_tracker)
                             if visual_scores:
@@ -479,13 +479,16 @@ def improve_single_ad(ad_id: str, output_dir: str, quality_threshold: float = No
 
 def run_cmd(args) -> None:
     custom_brief = None
-    if any(getattr(args, k, "") for k in ("audience", "product", "goal", "tone")):
+    if any(getattr(args, k, "") for k in ("audience", "product", "goal", "tone", "brand_name")):
         custom_brief = {
             "audience": (getattr(args, "audience", None) or "").strip() or "Parents of high school students",
             "product": (getattr(args, "product", None) or "").strip() or "SAT tutoring program",
             "goal": (getattr(args, "goal", None) or "").strip() or "conversion",
             "tone": (getattr(args, "tone", None) or "").strip() or "reassuring, results-focused",
         }
+        brand_name = (getattr(args, "brand_name", None) or "").strip()
+        if brand_name:
+            custom_brief["brand_name"] = brand_name
     result = run_pipeline(
         num_ads=max(1, args.num_ads),
         max_iterations=args.max_iterations,
@@ -527,6 +530,7 @@ def main() -> None:
     run.add_argument("--product", type=str, default="", help="Brief: product or offer")
     run.add_argument("--goal", type=str, default="", help="Brief: goal (e.g. conversion, awareness)")
     run.add_argument("--tone", type=str, default="", help="Brief: tone (optional)")
+    run.add_argument("--brand-name", type=str, default="", help="Brief: brand name (custom brand; omit for Varsity Tutors)")
     run.add_argument("--quality-threshold", type=float, default=None, help="Quality threshold (default 7.0)")
     run.add_argument("--num-variants", type=int, default=1, help="A/B variants per brief (same brief, different creative approaches)")
     run.set_defaults(func=run_cmd)

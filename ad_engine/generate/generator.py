@@ -15,6 +15,7 @@ from ad_engine.generate.prompt_templates import (
     IMPROVEMENT_USER,
     REFERENCE_PATTERNS_SNIPPET,
     VARIANT_ANGLES,
+    build_ad_generation_system,
 )
 from ad_engine.llm import get_llm
 from ad_engine.metrics.token_tracker import usage_from_response
@@ -65,7 +66,7 @@ class AdGenerator:
             return dict(FALLBACK_AD)
 
     def _generate_impl(self, brief: dict, reference_insights: dict = None, creative_angle: str = None) -> dict:
-        system = AD_GENERATION_SYSTEM
+        system = build_ad_generation_system(brief)
         insights = reference_insights if reference_insights is not None else getattr(self, "_reference_insights", None)
         if insights and isinstance(insights, dict):
             hooks = insights.get("hooks") or []
@@ -73,7 +74,7 @@ class AdGenerator:
             angles = insights.get("tone_angles") or []
             if hooks or ctas or angles:
                 snippet = REFERENCE_PATTERNS_SNIPPET.format(hooks=", ".join(hooks[:5]) or "N/A", ctas=", ".join(ctas[:5]) or "N/A", tone_angles=", ".join(angles[:4]) or "N/A")
-                system = AD_GENERATION_SYSTEM + snippet
+                system = system + snippet
         creative_angle_suffix = ("\nCreative approach for this variant: " + creative_angle) if creative_angle else ""
         user = AD_GENERATION_USER.format(
             audience=brief.get("audience", "Parents of high school students"),
@@ -106,10 +107,11 @@ class AdGenerator:
         ad: dict,
         weak_dimension: str,
         rationale: str,
+        brief: dict = None,
     ) -> dict:
         """Regenerate ad with targeted improvement for weak_dimension."""
         try:
-            return self._improve_impl(ad, weak_dimension, rationale)
+            return self._improve_impl(ad, weak_dimension, rationale, brief=brief)
         except Exception as e:
             logger.warning("Ad improvement failed, returning original ad: %s", e)
             return dict(ad) if ad else dict(FALLBACK_AD)
@@ -119,8 +121,10 @@ class AdGenerator:
         ad: dict,
         weak_dimension: str,
         rationale: str,
+        brief: dict = None,
     ) -> dict:
         """Internal improve; may raise."""
+        system = build_ad_generation_system(brief)
         user = IMPROVEMENT_USER.format(
             ad_json=json.dumps(ad, indent=2),
             weak_dimension=weak_dimension.replace("_", " ").title(),
@@ -129,7 +133,7 @@ class AdGenerator:
 
         def _call():
             return self._model.generate_content(
-                [AD_GENERATION_SYSTEM, user],
+                [system, user],
                 generation_config=self._generation_config,
             )
 

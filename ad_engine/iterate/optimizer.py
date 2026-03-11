@@ -60,15 +60,15 @@ class IterationEngine:
     def _run_for_brief_impl(self, brief: dict, creative_angle: str = None) -> dict:
         """Internal run; may raise."""
         ad = self.generator.generate(brief, creative_angle=creative_angle)
-        evaluation = self.evaluator.evaluate(ad)
+        evaluation = self.evaluator.evaluate(ad, brief=brief)
         iteration_count = 1
         history = [{"iteration": 1, "ad": ad, "evaluation": evaluation}]
 
         while evaluation["overall_score"] < self.quality_threshold and iteration_count < self.max_iterations:
             weak = _weakest_dimension(evaluation["scores"])
-            rationale = evaluation["dimensions"][weak].get("rationale", "") or get_improvement_hint(weak)
-            ad = self.generator.improve(ad, weak, rationale)
-            evaluation = self.evaluator.evaluate(ad)
+            rationale = evaluation["dimensions"][weak].get("rationale", "") or get_improvement_hint(weak, brief=brief)
+            ad = self.generator.improve(ad, weak, rationale, brief=brief)
+            evaluation = self.evaluator.evaluate(ad, brief=brief)
             iteration_count += 1
             history.append({"iteration": iteration_count, "ad": ad, "evaluation": evaluation})
 
@@ -100,11 +100,11 @@ class IterationEngine:
 
     def run_one_improvement(self, ad: dict, brief: dict) -> dict:
         """Run exactly one improve step on an existing ad (for UI 'Make it better' button). Returns result with updated ad and history."""
-        evaluation = self.evaluator.evaluate(ad)
+        evaluation = self.evaluator.evaluate(ad, brief=brief)
         weak = _weakest_dimension(evaluation["scores"])
-        rationale = evaluation["dimensions"][weak].get("rationale", "") or get_improvement_hint(weak)
-        new_ad = self.generator.improve(dict(ad), weak, rationale)
-        new_eval = self.evaluator.evaluate(new_ad)
+        rationale = evaluation["dimensions"][weak].get("rationale", "") or get_improvement_hint(weak, brief=brief)
+        new_ad = self.generator.improve(dict(ad), weak, rationale, brief=brief)
+        new_eval = self.evaluator.evaluate(new_ad, brief=brief)
         return {
             "brief": brief,
             "ad": new_ad,
@@ -118,15 +118,15 @@ class IterationEngine:
         }
 
     def _run_from_ad_impl(self, ad: dict, brief: dict) -> dict:
-        evaluation = self.evaluator.evaluate(ad)
+        evaluation = self.evaluator.evaluate(ad, brief=brief)
         iteration_count = 1
         history = [{"iteration": 1, "ad": dict(ad), "evaluation": evaluation}]
         current_ad = dict(ad)
         while evaluation["overall_score"] < self.quality_threshold and iteration_count < self.max_iterations:
             weak = _weakest_dimension(evaluation["scores"])
-            rationale = evaluation["dimensions"][weak].get("rationale", "") or get_improvement_hint(weak)
-            current_ad = self.generator.improve(current_ad, weak, rationale)
-            evaluation = self.evaluator.evaluate(current_ad)
+            rationale = evaluation["dimensions"][weak].get("rationale", "") or get_improvement_hint(weak, brief=brief)
+            current_ad = self.generator.improve(current_ad, weak, rationale, brief=brief)
+            evaluation = self.evaluator.evaluate(current_ad, brief=brief)
             iteration_count += 1
             history.append({"iteration": iteration_count, "ad": dict(current_ad), "evaluation": evaluation})
         accepted = evaluation["overall_score"] >= self.quality_threshold

@@ -24,6 +24,21 @@ Score the described creative (image concept + ad copy) on two dimensions, 1-10:
 
 Respond with ONLY a JSON object: {"brand_consistency": <1-10>, "engagement_potential": <1-10>}."""
 
+
+def build_visual_eval_system(brief: dict = None) -> str:
+    """Return visual eval system prompt — dynamic for custom briefs."""
+    if brief is None or not brief.get("brand_name"):
+        return VISUAL_EVAL_SYSTEM
+    brand_name = brief.get("brand_name", "Brand")
+    tone = brief.get("tone", "professional, engaging")
+    return f"""You are an expert at judging Facebook/Instagram ad creative fit.
+Score the described creative (image concept + ad copy) on two dimensions, 1-10:
+1. brand_consistency — Does this creative fit {brand_name}: {tone}? (1=generic/off-brand, 10=distinctly on-brand)
+2. engagement_potential — Would this stop the scroll and invite engagement? (1=forgettable, 10=highly engaging)
+
+Respond with ONLY a JSON object: {{"brand_consistency": <1-10>, "engagement_potential": <1-10>}}."""
+
+
 VISUAL_EVAL_USER = """Ad copy (primary text, headline, etc.):
 {ad_json}
 
@@ -59,8 +74,10 @@ def evaluate_visual(
         )
         user = VISUAL_EVAL_USER.format(ad_json=ad_json, image_concept=image_concept)
 
+        visual_system = build_visual_eval_system(brief)
+
         def _call():
-            return model.generate_content([VISUAL_EVAL_SYSTEM, user])
+            return model.generate_content([visual_system, user])
 
         response = with_retry(_call)
         if token_tracker and hasattr(response, "usage_metadata"):
