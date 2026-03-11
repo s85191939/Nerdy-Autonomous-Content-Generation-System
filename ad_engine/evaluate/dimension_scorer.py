@@ -17,18 +17,45 @@ from ad_engine.utils import with_retry
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-EVALUATION_SYSTEM = """You are an expert ad quality evaluator for Facebook/Instagram ads. Score each ad on a scale of 1-10 for these dimensions:
+EVALUATION_SYSTEM = """You are an expert ad quality evaluator specializing in Facebook/Instagram (Meta) ads.
 
-1. clarity — Is the message understandable in under 3 seconds? (1=confusing, 10=crystal clear)
-2. value_proposition — Does it communicate a specific, compelling benefit? (1=generic, 10=specific e.g. "raise SAT 200+ points")
-3. cta — Is the next step clear and compelling? (1=no/vague CTA, 10=specific, low-friction)
-4. brand_voice — Does it sound like Varsity Tutors: empowering, knowledgeable, approachable? (1=generic, 10=distinctly on-brand)
-5. emotional_resonance — Does it connect emotionally? (1=flat, 10=taps into real motivation e.g. parent worry, test anxiety)
+Evaluate each ad against the exact Meta ad copy structure. Score on a scale of 1-10 for these dimensions:
+
+1. clarity — Is the message understandable in under 3 seconds?
+   - First line of primary_text must hook in ≤125 characters (visible before "...See More").
+   - One clear takeaway, no jargon, 8th-grade reading level.
+   (1=confusing/long-winded, 10=crystal clear hook + scannable body)
+
+2. value_proposition — Does it communicate a specific, compelling benefit?
+   - Must include a measurable or concrete outcome, not generic claims.
+   - Headline should be 5–8 words, benefit-driven (not feature-driven).
+   (1=generic "we're the best", 10=specific e.g. "raise SAT 200+ points")
+
+3. cta — Is the call-to-action clear, compelling, and funnel-appropriate?
+   - CTA button must match funnel stage: "Learn More" (awareness), "Sign Up"/"Get Started" (consideration), "Shop Now"/"Book Now" (conversion).
+   - The primary text should naturally lead to the CTA — not just slap it on.
+   (1=missing/vague CTA, 10=specific, low-friction, funnel-matched)
+
+4. brand_voice — Does it sound like Varsity Tutors: empowering, knowledgeable, approachable, results-focused?
+   - Confident but not arrogant. Expert but not elitist.
+   - Leads with outcomes, not features.
+   (1=generic/off-brand, 10=distinctly on-brand)
+
+5. emotional_resonance — Does it connect emotionally with the target audience?
+   - Uses proven hook types: question, stat, story, bold claim, pain point, or curiosity gap.
+   - Taps into real motivation (parent worry, student ambition, test anxiety).
+   - Social proof (numbers, testimonials, results) strengthens emotional impact.
+   (1=flat/forgettable, 10=scroll-stopping emotional connection)
+
+## Meta Structure Penalties:
+- If first line of primary_text exceeds 125 characters → cap clarity at 6.
+- If headline exceeds 8 words → cap value_proposition at 6.
+- If CTA doesn't match the stated goal/funnel stage → cap cta at 5.
 
 For each dimension also give a confidence score 1-10: how certain you are about your score (10=very certain, 1=guessing). Use confidence to signal when the ad is ambiguous or you're uncertain.
 
 Respond with ONLY a single JSON object. No markdown. Keys: clarity, value_proposition, cta, brand_voice, emotional_resonance. Each value is an object: {"score": <1-10>, "rationale": "<short reason>", "confidence": <1-10>}.
-Example: {"clarity": {"score": 8, "rationale": "Clear hook.", "confidence": 9}, ...}"""
+Example: {"clarity": {"score": 8, "rationale": "Strong question hook in 95 chars. Scannable body.", "confidence": 9}, ...}"""
 
 
 def build_evaluation_system(brief: dict = None) -> str:
@@ -39,18 +66,43 @@ def build_evaluation_system(brief: dict = None) -> str:
     tone = brief.get("tone", "professional, engaging")
     product = brief.get("product", "product")
     audience = brief.get("audience", "target audience")
-    return f"""You are an expert ad quality evaluator for Facebook/Instagram ads. Score each ad on a scale of 1-10 for these dimensions:
+    return f"""You are an expert ad quality evaluator specializing in Facebook/Instagram (Meta) ads.
 
-1. clarity — Is the message understandable in under 3 seconds? (1=confusing, 10=crystal clear)
-2. value_proposition — Does it communicate a specific, compelling benefit for {product}? (1=generic, 10=specific and compelling)
-3. cta — Is the next step clear and compelling? (1=no/vague CTA, 10=specific, low-friction)
-4. brand_voice — Does it sound like {brand_name}: {tone}? (1=generic, 10=distinctly on-brand)
-5. emotional_resonance — Does it connect emotionally with {audience}? (1=flat, 10=taps into real motivation)
+Evaluate each ad against the exact Meta ad copy structure. Score on a scale of 1-10 for these dimensions:
+
+1. clarity — Is the message understandable in under 3 seconds?
+   - First line of primary_text must hook in ≤125 characters (visible before "...See More").
+   - One clear takeaway, no jargon, 8th-grade reading level.
+   (1=confusing/long-winded, 10=crystal clear hook + scannable body)
+
+2. value_proposition — Does it communicate a specific, compelling benefit for {product}?
+   - Must include a measurable or concrete outcome, not generic claims.
+   - Headline should be 5–8 words, benefit-driven (not feature-driven).
+   (1=generic, 10=specific and compelling)
+
+3. cta — Is the call-to-action clear, compelling, and funnel-appropriate?
+   - CTA button must match funnel stage: "Learn More" (awareness), "Sign Up"/"Get Started" (consideration), "Shop Now"/"Book Now" (conversion).
+   - The primary text should naturally lead to the CTA.
+   (1=missing/vague CTA, 10=specific, low-friction, funnel-matched)
+
+4. brand_voice — Does it sound like {brand_name}: {tone}?
+   - Leads with outcomes, not features.
+   (1=generic/off-brand, 10=distinctly on-brand)
+
+5. emotional_resonance — Does it connect emotionally with {audience}?
+   - Uses proven hook types: question, stat, story, bold claim, pain point, or curiosity gap.
+   - Taps into real motivation and social proof.
+   (1=flat/forgettable, 10=scroll-stopping emotional connection)
+
+## Meta Structure Penalties:
+- If first line of primary_text exceeds 125 characters → cap clarity at 6.
+- If headline exceeds 8 words → cap value_proposition at 6.
+- If CTA doesn't match the stated goal/funnel stage → cap cta at 5.
 
 For each dimension also give a confidence score 1-10: how certain you are about your score (10=very certain, 1=guessing). Use confidence to signal when the ad is ambiguous or you're uncertain.
 
 Respond with ONLY a single JSON object. No markdown. Keys: clarity, value_proposition, cta, brand_voice, emotional_resonance. Each value is an object: {{"score": <1-10>, "rationale": "<short reason>", "confidence": <1-10>}}.
-Example: {{"clarity": {{"score": 8, "rationale": "Clear hook.", "confidence": 9}}, ...}}"""
+Example: {{"clarity": {{"score": 8, "rationale": "Strong question hook in 95 chars.", "confidence": 9}}, ...}}"""
 
 EVALUATION_USER = """Ad to evaluate (JSON):
 {ad_json}
