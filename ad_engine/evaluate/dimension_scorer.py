@@ -175,12 +175,20 @@ class Evaluator:
         self._config = None
 
     def evaluate(self, ad: dict, brief: dict = None) -> dict:
-        """Return dimension scores with rationales, overall_score, and confidence. On failure returns default_evaluation."""
-        try:
-            return self._evaluate_impl(ad, brief=brief)
-        except Exception as e:
-            logger.warning("Evaluation failed, using default evaluation: %s", e)
-            return default_evaluation(5.0, self._dimension_weights)
+        """Return dimension scores with rationales, overall_score, and confidence.
+        Retries up to 3 times on failure before falling back to default_evaluation."""
+        last_exc = None
+        for attempt in range(3):
+            try:
+                return self._evaluate_impl(ad, brief=brief)
+            except Exception as e:
+                last_exc = e
+                logger.warning("Evaluation attempt %d/3 failed: %s", attempt + 1, e)
+                if attempt < 2:
+                    import time
+                    time.sleep(0.5 * (attempt + 1))
+        logger.error("Evaluation failed after 3 attempts: %s — using default score", last_exc)
+        return default_evaluation(5.0, self._dimension_weights)
 
     def evaluate_batch(self, ads: List[dict], brief: dict = None) -> List[dict]:
         """Evaluate multiple ads in parallel using ThreadPoolExecutor.
@@ -206,7 +214,7 @@ class Evaluator:
                 generation_config=self._config,
             )
 
-        response = with_retry(_call)
+        response = with_retry(_call, max_retries=4)
         if self._token_tracker:
             self._token_tracker.add_from_usage(usage_from_response(response))
         text = response.text if hasattr(response, "text") else str(response)

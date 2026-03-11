@@ -216,23 +216,31 @@ def _run_pipeline_body(num_ads, max_iterations, out_dir, seed, progress_callback
                             logger.warning("Improve failed for ad %d: %s", i, e)
                             continue
                         r = results[i]
+                        prev_score = r["evaluation"]["overall_score"]
+                        new_score = new_ev["overall_score"]
                         iter_num = r["iteration_count"] + 1
-                        accepted = new_ev["overall_score"] >= quality_threshold
-                        r["ad"] = new_ad
-                        r["evaluation"] = new_ev
+                        # ── QUALITY RATCHET: only accept improvement, never regress ──
+                        if new_score > prev_score:
+                            r["ad"] = new_ad
+                            r["evaluation"] = new_ev
+                            logger.info("Ad %d improved: %.2f → %.2f (targeted %s)", i, prev_score, new_score, weak)
+                        else:
+                            # Keep previous ad — don't overwrite with worse version
+                            logger.warning("Ad %d NOT improved: %.2f → %.2f (keeping %.2f, targeted %s)", i, prev_score, new_score, prev_score, weak)
                         r["iteration_count"] = iter_num
-                        r["accepted"] = accepted
-                        r["history"].append({"iteration": iter_num, "ad": new_ad, "evaluation": new_ev})
+                        r["accepted"] = r["evaluation"]["overall_score"] >= quality_threshold
+                        r["history"].append({"iteration": iter_num, "ad": r["ad"], "evaluation": r["evaluation"]})
+                        report_score = r["evaluation"]["overall_score"]
                         if progress_callback:
                             progress_callback(
                                 len(tasks) - len([(ii, rr) for ii, rr in enumerate(results) if rr and not rr["accepted"]]),
                                 len(tasks),
-                                f"Ad {i} improved: {new_ev['overall_score']} (was {r['history'][-2]['evaluation']['overall_score']}, targeted {weak})",
+                                f"Ad {i}: {report_score} (targeted {weak})",
                                 completed_ad={
                                     "id": r["_ad_id"],
-                                    "ad_copy": new_ad,
-                                    "overall_score": new_ev["overall_score"],
-                                    "accepted": accepted,
+                                    "ad_copy": r["ad"],
+                                    "overall_score": report_score,
+                                    "accepted": r["accepted"],
                                     "iteration_count": iter_num,
                                 },
                             )
@@ -561,25 +569,45 @@ def improve_single_ad(ad_id: str, output_dir: str, quality_threshold: float = No
     prev_scores = result["history"][0]["evaluation"].get("scores", {})
     weak = min(prev_scores, key=lambda d: prev_scores.get(d, 10)) if prev_scores else None
     existing_history = list(ad_record.get("iteration_history", []))
-    # Save previous version's ad copy + scores into the history entry
+    prev_overall = ad_record.get("overall_score") or 0
+    new_overall = result["evaluation"].get("overall_score") or 0
+
+    # ── QUALITY RATCHET: never replace a good ad with a worse one ──
+    improved = new_overall >= prev_overall
+    if improved:
+        use_ad = result["ad"]
+        use_eval = result["evaluation"]
+        logger.info("Ad %s improved: %.2f → %.2f (targeted %s)", ad_id, prev_overall, new_overall, weak)
+    else:
+        # Keep the previous (better) ad and its scores; log the failed attempt
+        use_ad = ad_copy
+        use_eval = {
+            "scores": ad_record.get("scores", {}),
+            "overall_score": prev_overall,
+            "confidence": ad_record.get("confidence"),
+            "dimensions": ad_record.get("dimensions", {}),
+        }
+        logger.warning("Ad %s NOT improved: %.2f → %.2f (keeping previous). Targeted %s", ad_id, prev_overall, new_overall, weak)
+
     new_entry = {
         "iteration": len(existing_history) + 1,
-        "overall_score": result["evaluation"].get("overall_score"),
+        "overall_score": new_overall,
         "scores": result["evaluation"].get("scores", {}),
         "targeted_dimension": weak,
-        "previous_ad_copy": dict(ad_copy),  # preserve previous version
-        "previous_overall_score": ad_record.get("overall_score"),
+        "previous_ad_copy": dict(ad_copy),
+        "previous_overall_score": prev_overall,
+        "kept_previous": not improved,
     }
     updated_record = {
         "id": ad_id,
         "brief": brief,
-        "ad_copy": result["ad"],
-        "scores": result["evaluation"]["scores"],
-        "overall_score": result["evaluation"]["overall_score"],
-        "confidence": result["evaluation"].get("confidence"),
-        "dimensions": result["evaluation"].get("dimensions"),
+        "ad_copy": use_ad,
+        "scores": use_eval["scores"],
+        "overall_score": use_eval["overall_score"],
+        "confidence": use_eval.get("confidence"),
+        "dimensions": use_eval.get("dimensions"),
         "iteration_count": len(existing_history) + 1,
-        "accepted": result["evaluation"]["overall_score"] >= quality_threshold,
+        "accepted": use_eval["overall_score"] >= quality_threshold,
         "iteration_history": existing_history + [new_entry],
     }
     ads[idx] = updated_record

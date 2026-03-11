@@ -63,26 +63,37 @@ class IterationEngine:
         evaluation = self.evaluator.evaluate(ad, brief=brief)
         iteration_count = 1
         history = [{"iteration": 1, "ad": ad, "evaluation": evaluation}]
+        best_ad = dict(ad)
+        best_eval = evaluation
 
         while evaluation["overall_score"] < self.quality_threshold and iteration_count < self.max_iterations:
             prev_score = evaluation["overall_score"]
             weak = _weakest_dimension(evaluation["scores"])
             rationale = evaluation["dimensions"][weak].get("rationale", "") or get_improvement_hint(weak, brief=brief)
-            ad = self.generator.improve(ad, weak, rationale, brief=brief)
-            evaluation = self.evaluator.evaluate(ad, brief=brief)
+            new_ad = self.generator.improve(ad, weak, rationale, brief=brief)
+            new_eval = self.evaluator.evaluate(new_ad, brief=brief)
             iteration_count += 1
-            history.append({"iteration": iteration_count, "ad": ad, "evaluation": evaluation})
-            # Early stop: if score got worse or barely improved, stop iterating
+            history.append({"iteration": iteration_count, "ad": new_ad, "evaluation": new_eval})
+            # Quality ratchet: only accept if score improved
+            if new_eval["overall_score"] >= best_eval["overall_score"]:
+                ad = new_ad
+                evaluation = new_eval
+                best_ad = dict(new_ad)
+                best_eval = new_eval
+            else:
+                logger.debug("Iteration %d regressed (%.2f → %.2f), keeping best (%.2f)", iteration_count, prev_score, new_eval["overall_score"], best_eval["overall_score"])
+                ad = dict(best_ad)
+                evaluation = best_eval
             improvement = evaluation["overall_score"] - prev_score
-            if improvement < 0.3 and iteration_count >= 2:
+            if improvement < 0.3 and iteration_count >= 3:
                 logger.debug("Early stop at iteration %d: improvement %.2f < 0.3", iteration_count, improvement)
                 break
 
-        accepted = evaluation["overall_score"] >= self.quality_threshold
+        accepted = best_eval["overall_score"] >= self.quality_threshold
         return {
             "brief": brief,
-            "ad": ad,
-            "evaluation": evaluation,
+            "ad": best_ad,
+            "evaluation": best_eval,
             "iteration_count": iteration_count,
             "accepted": accepted,
             "history": history,
@@ -105,18 +116,27 @@ class IterationEngine:
             }
 
     def run_one_improvement(self, ad: dict, brief: dict) -> dict:
-        """Run exactly one improve step on an existing ad (for UI 'Make it better' button). Returns result with updated ad and history."""
+        """Run exactly one improve step on an existing ad (for UI 'Make it better' button).
+        Quality ratchet: if the new version scores worse, keeps the original."""
         evaluation = self.evaluator.evaluate(ad, brief=brief)
         weak = _weakest_dimension(evaluation["scores"])
         rationale = evaluation["dimensions"][weak].get("rationale", "") or get_improvement_hint(weak, brief=brief)
         new_ad = self.generator.improve(dict(ad), weak, rationale, brief=brief)
         new_eval = self.evaluator.evaluate(new_ad, brief=brief)
+        # Quality ratchet: never regress
+        if new_eval["overall_score"] >= evaluation["overall_score"]:
+            use_ad = new_ad
+            use_eval = new_eval
+        else:
+            logger.debug("Improvement regressed (%.2f → %.2f), keeping original", evaluation["overall_score"], new_eval["overall_score"])
+            use_ad = dict(ad)
+            use_eval = evaluation
         return {
             "brief": brief,
-            "ad": new_ad,
-            "evaluation": new_eval,
+            "ad": use_ad,
+            "evaluation": use_eval,
             "iteration_count": 2,  # original + 1 improve
-            "accepted": new_eval["overall_score"] >= self.quality_threshold,
+            "accepted": use_eval["overall_score"] >= self.quality_threshold,
             "history": [
                 {"iteration": 1, "ad": dict(ad), "evaluation": evaluation},
                 {"iteration": 2, "ad": dict(new_ad), "evaluation": new_eval},
@@ -128,24 +148,36 @@ class IterationEngine:
         iteration_count = 1
         history = [{"iteration": 1, "ad": dict(ad), "evaluation": evaluation}]
         current_ad = dict(ad)
+        best_ad = dict(ad)
+        best_eval = evaluation
         while evaluation["overall_score"] < self.quality_threshold and iteration_count < self.max_iterations:
             prev_score = evaluation["overall_score"]
             weak = _weakest_dimension(evaluation["scores"])
             rationale = evaluation["dimensions"][weak].get("rationale", "") or get_improvement_hint(weak, brief=brief)
-            current_ad = self.generator.improve(current_ad, weak, rationale, brief=brief)
-            evaluation = self.evaluator.evaluate(current_ad, brief=brief)
+            new_ad = self.generator.improve(current_ad, weak, rationale, brief=brief)
+            new_eval = self.evaluator.evaluate(new_ad, brief=brief)
             iteration_count += 1
-            history.append({"iteration": iteration_count, "ad": dict(current_ad), "evaluation": evaluation})
-            # Early stop: if score got worse or barely improved, stop iterating
+            history.append({"iteration": iteration_count, "ad": dict(new_ad), "evaluation": new_eval})
+            # Quality ratchet: only accept if score improved
+            if new_eval["overall_score"] >= best_eval["overall_score"]:
+                current_ad = new_ad
+                evaluation = new_eval
+                best_ad = dict(new_ad)
+                best_eval = new_eval
+            else:
+                logger.debug("Iteration %d regressed (%.2f → %.2f), keeping best (%.2f)", iteration_count, prev_score, new_eval["overall_score"], best_eval["overall_score"])
+                current_ad = dict(best_ad)
+                evaluation = best_eval
+            # Early stop: if score barely improved across cycles
             improvement = evaluation["overall_score"] - prev_score
-            if improvement < 0.3 and iteration_count >= 2:
+            if improvement < 0.3 and iteration_count >= 3:
                 logger.debug("Early stop at iteration %d: improvement %.2f < 0.3", iteration_count, improvement)
                 break
-        accepted = evaluation["overall_score"] >= self.quality_threshold
+        accepted = best_eval["overall_score"] >= self.quality_threshold
         return {
             "brief": brief,
-            "ad": current_ad,
-            "evaluation": evaluation,
+            "ad": best_ad,
+            "evaluation": best_eval,
             "iteration_count": iteration_count,
             "accepted": accepted,
             "history": history,
