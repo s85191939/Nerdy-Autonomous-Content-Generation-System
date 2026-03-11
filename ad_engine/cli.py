@@ -386,6 +386,7 @@ def _run_pipeline_body(num_ads, max_iterations, out_dir, seed, progress_callback
     )
     result["run_id"] = run_id
     result["run_timestamp"] = run_record["timestamp"]
+    result["quality_threshold"] = quality_threshold
     return result
 
 
@@ -496,13 +497,16 @@ def improve_single_ad(ad_id: str, output_dir: str, quality_threshold: float = No
     result = engine.run_one_improvement(ad_copy, brief)
     prev_scores = result["history"][0]["evaluation"].get("scores", {})
     weak = min(prev_scores, key=lambda d: prev_scores.get(d, 10)) if prev_scores else None
+    existing_history = list(ad_record.get("iteration_history", []))
+    # Save previous version's ad copy + scores into the history entry
     new_entry = {
-        "iteration": len(ad_record.get("iteration_history", [])) + 1,
+        "iteration": len(existing_history) + 1,
         "overall_score": result["evaluation"].get("overall_score"),
         "scores": result["evaluation"].get("scores", {}),
         "targeted_dimension": weak,
+        "previous_ad_copy": dict(ad_copy),  # preserve previous version
+        "previous_overall_score": ad_record.get("overall_score"),
     }
-    existing_history = list(ad_record.get("iteration_history", []))
     updated_record = {
         "id": ad_id,
         "brief": brief,
@@ -512,7 +516,7 @@ def improve_single_ad(ad_id: str, output_dir: str, quality_threshold: float = No
         "confidence": result["evaluation"].get("confidence"),
         "dimensions": result["evaluation"].get("dimensions"),
         "iteration_count": len(existing_history) + 1,
-        "accepted": result["accepted"],
+        "accepted": result["evaluation"]["overall_score"] >= quality_threshold,
         "iteration_history": existing_history + [new_entry],
     }
     ads[idx] = updated_record

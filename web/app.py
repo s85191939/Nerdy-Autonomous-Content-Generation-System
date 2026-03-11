@@ -279,14 +279,19 @@ def api_result_evaluation_report():
 
 @app.route("/api/improve_ad", methods=["POST"])
 def api_improve_ad():
-    """Run one improvement step on a single ad (from last run's output). Body: { ad_id }."""
+    """Run one improvement step on a single ad (from last run's output). Body: { ad_id, quality_threshold? }."""
     if _run_state["status"] == "running":
         return jsonify({"ok": False, "error": "A run is in progress"}), 409
     data = request.get_json(force=True, silent=True) or {}
     ad_id = (data.get("ad_id") or "").strip()
     if not ad_id or ".." in ad_id or "/" in ad_id:
         return jsonify({"ok": False, "error": "Invalid ad_id"}), 400
-    updated = improve_single_ad(ad_id, str(ROOT / "output"))
+    qt = data.get("quality_threshold")
+    try:
+        qt = float(qt) if qt is not None else None
+    except (TypeError, ValueError):
+        qt = None
+    updated = improve_single_ad(ad_id, str(ROOT / "output"), quality_threshold=qt)
     if updated is None:
         return jsonify({"ok": False, "error": "Ad not found or no run output"}), 404
     return jsonify({"ok": True, "ad": updated})
@@ -596,8 +601,8 @@ INDEX_HTML = """
                 class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
             </div>
             <div>
-              <label for="quality_threshold" class="block text-sm font-medium text-slate-700 mb-1.5">Quality threshold</label>
-              <input type="number" id="quality_threshold" name="quality_threshold" step="0.1" min="1" max="10" placeholder="7.0"
+              <label for="quality_threshold" class="block text-sm font-medium text-slate-700 mb-1.5">Quality threshold <span class="text-slate-400 font-normal">(min score)</span></label>
+              <input type="number" id="quality_threshold" name="quality_threshold" step="0.1" min="1" max="10" value="7.0"
                 class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
             </div>
           </div>
@@ -616,12 +621,9 @@ INDEX_HTML = """
             Advanced settings
           </summary>
           <div class="mt-4 space-y-5">
+            <!-- max_iterations hidden: use "Make it better" to iterate manually -->
+            <input type="hidden" id="max_iterations" name="max_iterations" value="1">
             <div class="grid grid-cols-2 gap-4">
-              <div>
-                <label for="max_iterations" class="block text-sm font-medium text-slate-700 mb-1.5">Max iterations</label>
-                <input type="number" id="max_iterations" name="max_iterations" value="1" min="1" max="10"
-                  class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
-              </div>
               <div>
                 <label for="seed" class="block text-sm font-medium text-slate-700 mb-1.5">Random seed</label>
                 <input type="number" id="seed" name="seed" value="42"
@@ -889,30 +891,34 @@ INDEX_HTML = """
       const cta = esc(copy.cta || '');
       const score = ad.overall_score != null ? Number(ad.overall_score) : '—';
       const accepted = ad.accepted;
-      const badge = accepted ? '<span class="inline-flex items-center rounded-full bg-emerald-100 text-emerald-800 text-xs font-medium px-2 py-0.5">Accepted</span>' : '<span class="inline-flex items-center rounded-full bg-slate-100 text-slate-600 text-xs font-medium px-2 py-0.5">Below threshold</span>';
+      const iterCount = ad.iteration_count || 1;
+      const badge = accepted ? '<span class="inline-flex items-center rounded-full bg-emerald-100 text-emerald-800 text-xs font-medium px-2 py-0.5">Accepted</span>' : '<span class="inline-flex items-center rounded-full bg-red-100 text-red-700 text-xs font-medium px-2 py-0.5">Below threshold</span>';
+      const cycleBadge = iterCount > 1 ? '<span class="inline-flex items-center rounded-full bg-blue-100 text-blue-700 text-xs font-medium px-2 py-0.5">v' + iterCount + '</span>' : '';
       const dims = ad.dimensions || {};
       const dimRows = Object.keys(dims).map(function(d) {
         const o = dims[d];
         const s = o && (o.score != null) ? o.score : (ad.scores && ad.scores[d]);
         const r = o && o.rationale ? esc(o.rationale) : '';
-        return '<tr><td class="font-medium text-slate-600 pr-2">' + esc(d) + '</td><td class="pr-2">' + s + '</td><td class="text-slate-500 text-xs">' + r + '</td></tr>';
+        return '<tr><td class="font-medium text-slate-600 pr-2">' + esc(d) + '</td><td class="pr-2 font-semibold ' + scoreColor(s) + '">' + s + '</td><td class="text-slate-500 text-xs">' + r + '</td></tr>';
       }).join('');
       const hist = ad.iteration_history || [];
       const histRows = hist.map(function(h, i) {
-        const t = h.targeted_dimension ? ' → ' + esc(h.targeted_dimension) : '';
-        return '<tr><td class="pr-2">' + (h.iteration || i + 1) + '</td><td class="pr-2">' + (h.overall_score != null ? h.overall_score : '—') + '</td><td class="text-slate-500 text-xs">' + esc(t) + '</td></tr>';
+        const t = h.targeted_dimension ? esc(h.targeted_dimension) : '';
+        return '<tr><td class="pr-2">' + (h.iteration || i + 1) + '</td><td class="pr-2 font-semibold ' + scoreColor(h.overall_score) + '">' + (h.overall_score != null ? h.overall_score : '—') + '</td><td class="text-slate-500 text-xs">' + t + '</td></tr>';
       }).join('');
-      return '<details class="rounded-xl border border-slate-200 bg-white shadow-sm text-left group">' +
+      const adId = esc(ad.id || ('ad_' + idx));
+      return '<div id="ad-card-' + adId + '" class="ad-card-wrapper">' +
+        '<details class="rounded-xl border border-slate-200 bg-white shadow-sm text-left group" open>' +
         '<summary class="p-4 cursor-pointer list-none flex items-center justify-between gap-2 flex-wrap">' +
           (copy.image_path ? '<img src="/api/creatives/' + esc(copy.image_path.replace('creatives/','')) + '" alt="" class="w-12 h-12 rounded object-cover shrink-0">' : '') +
           '<span class="text-xs font-medium text-slate-400">' + (ad.id || ('Ad ' + (idx + 1))) + '</span>' +
           '<span class="text-sm font-bold ' + scoreColor(score) + '">Score: ' + score + '</span>' +
-          badge +
-          '<span class="text-slate-400 text-xs">' + headline + '</span>' +
-          '<button type="button" class="improve-ad-btn px-2 py-1 rounded-lg border border-primary-500 text-primary-600 text-xs font-medium hover:bg-primary-50 shrink-0" data-ad-id="' + esc(ad.id || ('ad_' + idx)) + '" onclick="event.preventDefault();event.stopPropagation();">Make it better</button>' +
+          badge + cycleBadge +
+          '<span class="text-slate-400 text-xs truncate max-w-[200px]">' + headline + '</span>' +
+          '<button type="button" class="improve-ad-btn px-3 py-1.5 rounded-lg bg-primary-600 text-white text-xs font-semibold hover:bg-primary-700 shadow-sm shrink-0 transition-colors" data-ad-id="' + adId + '" onclick="event.preventDefault();event.stopPropagation();">Make it better</button>' +
         '</summary>' +
         '<div class="px-4 pb-4 border-t border-slate-100">' +
-          (copy.image_path ? '<div class="mt-3 bg-slate-50 rounded-lg p-3 border border-slate-200"><img src="/api/creatives/' + esc(copy.image_path.replace('creatives/','')) + '" alt="Generated ad creative" class="rounded-lg border border-slate-200 max-h-96 w-full object-contain"><div class="mt-2 flex items-center gap-2"><a href="/api/creatives/' + esc(copy.image_path.replace('creatives/','')) + '?download=1" download class="inline-flex items-center gap-1 text-xs font-medium text-primary-600 hover:text-primary-700 border border-primary-200 rounded-lg px-2.5 py-1.5 hover:bg-primary-50">⬇ Download image</a><span class="text-xs text-slate-400">1080×1080 PNG</span></div></div>' : '') +
+          (copy.image_path ? '<div class="mt-3 bg-slate-50 rounded-lg p-3 border border-slate-200"><img src="/api/creatives/' + esc(copy.image_path.replace('creatives/','')) + '" alt="Generated ad creative" class="rounded-lg border border-slate-200 max-h-96 w-full object-contain"><div class="mt-2 flex items-center gap-2"><a href="/api/creatives/' + esc(copy.image_path.replace('creatives/','')) + '?download=1" download class="inline-flex items-center gap-1 text-xs font-medium text-primary-600 hover:text-primary-700 border border-primary-200 rounded-lg px-2.5 py-1.5 hover:bg-primary-50">Download image</a><span class="text-xs text-slate-400">1080x1080 PNG</span></div></div>' : '') +
           '<h4 class="font-semibold text-slate-900 mt-3 text-base">' + headline + '</h4>' +
           (primary ? '<p class="text-sm text-slate-700 mt-2 whitespace-pre-wrap">' + primary + '</p>' : '') +
           (description ? '<p class="text-sm text-slate-600 mt-1">' + description + '</p>' : '') +
@@ -920,7 +926,8 @@ INDEX_HTML = """
           (dimRows ? '<div class="mt-4"><p class="text-xs font-semibold text-slate-500 uppercase mb-1">Dimensions</p><table class="w-full text-sm"><tbody>' + dimRows + '</tbody></table></div>' : '') +
           (histRows ? '<div class="mt-3"><p class="text-xs font-semibold text-slate-500 uppercase mb-1">Iteration history</p><table class="w-full text-sm"><thead><tr><th class="text-left pr-2">Cycle</th><th class="text-left pr-2">Score</th><th class="text-left">Targeted</th></tr></thead><tbody>' + histRows + '</tbody></table></div>' : '') +
         '</div>' +
-        '</details>';
+        '</details>' +
+        '</div>';
     }
 
     function renderGeneratedAdsPage(ads, page, pageSize) {
@@ -1038,7 +1045,7 @@ INDEX_HTML = """
           showProgress(false);
           resultError.classList.add('hidden');
           resultBody.innerHTML = statCard('Ads generated', data.result.num_ads) +
-            statCard('Accepted (≥7.0)', data.result.accepted) +
+            statCard('Accepted (≥' + (data.result.quality_threshold || '7.0') + ')', data.result.accepted) +
             statCard('Average score', data.result.avg_score) +
             (data.result.backend ? statCard('Model', data.result.backend + ' (generation + evaluation)') : '') +
             (data.result.total_tokens != null ? statCard('Total tokens', data.result.total_tokens.toLocaleString()) : '') +
@@ -1213,23 +1220,59 @@ INDEX_HTML = """
       e.stopPropagation();
       var adId = btn.getAttribute('data-ad-id');
       if (!adId) return;
-      btn.disabled = true;
-      btn.textContent = 'Improving…';
-      fetch('/api/improve_ad', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad_id: adId }) })
+      // Find the ad's current iteration count
+      var currentAd = allCompletedAds.find(function(a) { return (a.id || a.ad_id) === adId; });
+      var currentCycle = (currentAd && currentAd.iteration_count) ? currentAd.iteration_count : 1;
+      var nextCycle = currentCycle + 1;
+      // Replace the ad card with a loading skeleton
+      var cardWrapper = document.getElementById('ad-card-' + adId);
+      if (cardWrapper) {
+        var startTime = Date.now();
+        cardWrapper.innerHTML =
+          '<div class="rounded-xl border border-primary-200 bg-primary-50/30 shadow-sm p-6 text-center">' +
+            '<div class="flex items-center justify-center gap-3 mb-4">' +
+              '<svg class="w-6 h-6 text-primary-500 spin-slow" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>' +
+              '<span class="text-sm font-semibold text-primary-700">Improving ad — iteration ' + nextCycle + '</span>' +
+            '</div>' +
+            '<div class="space-y-3">' +
+              '<div class="h-3 bg-primary-100 rounded-full w-3/4 mx-auto progress-indeterminate"></div>' +
+              '<div class="h-3 bg-primary-100 rounded-full w-1/2 mx-auto progress-indeterminate" style="animation-delay:0.2s"></div>' +
+              '<div class="h-3 bg-primary-100 rounded-full w-2/3 mx-auto progress-indeterminate" style="animation-delay:0.4s"></div>' +
+            '</div>' +
+            '<div class="mt-4 flex items-center justify-center gap-4 text-xs text-slate-500">' +
+              '<span>Cycle <strong class="text-primary-700">' + currentCycle + ' → ' + nextCycle + '</strong></span>' +
+              '<span id="improve-timer-' + adId + '">0s</span>' +
+            '</div>' +
+            '<p class="text-xs text-slate-400 mt-2">Evaluating weakest dimension, generating improved copy, re-scoring...</p>' +
+          '</div>';
+        // Elapsed timer for improvement
+        var timerEl = document.getElementById('improve-timer-' + adId);
+        var timerInterval = setInterval(function() {
+          if (!timerEl) { clearInterval(timerInterval); return; }
+          var elapsed = Math.round((Date.now() - startTime) / 1000);
+          timerEl.textContent = elapsed + 's';
+        }, 1000);
+      }
+      var qtEl = document.getElementById('quality_threshold');
+      var qt = qtEl && qtEl.value ? parseFloat(qtEl.value) : undefined;
+      fetch('/api/improve_ad', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad_id: adId, quality_threshold: qt }) })
         .then(function(r) { return r.json(); })
         .then(function(data) {
           if (data.ok && data.ad) {
             var idx = allCompletedAds.findIndex(function(a) { return (a.id || a.ad_id) === adId; });
             if (idx >= 0) {
               allCompletedAds[idx] = data.ad;
-              renderGeneratedAdsPage(allCompletedAds, currentPage, PAGE_SIZE);
             }
+            renderGeneratedAdsPage(allCompletedAds, currentPage, PAGE_SIZE);
           } else {
             alert(data.error || 'Improve failed');
+            renderGeneratedAdsPage(allCompletedAds, currentPage, PAGE_SIZE);
           }
         })
-        .catch(function() { alert('Request failed'); })
-        .finally(function() { btn.disabled = false; btn.textContent = 'Make it better'; });
+        .catch(function() {
+          alert('Request failed — check server logs');
+          renderGeneratedAdsPage(allCompletedAds, currentPage, PAGE_SIZE);
+        });
     });
 
     var extractBtn = document.getElementById('extractPatternsBtn');
