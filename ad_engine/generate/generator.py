@@ -70,11 +70,15 @@ def _parse_json_array_from_response(text: str, expected_count: int) -> List[dict
 
 
 def _enforce_primary_text_length(ad: dict, max_visible: int = 125) -> None:
-    """Ensure primary text visible portion is at most max_visible chars (Meta spec)."""
+    """Store full primary text; add a truncated preview for Meta's visible portion."""
     pt = (ad.get("primary_text") or "").strip()
-    if not pt or len(pt) <= max_visible:
+    if not pt:
         return
-    ad["primary_text"] = pt[: max_visible - 3].rstrip() + "..."
+    # Always keep the full text — never truncate the actual copy
+    ad["primary_text"] = pt
+    # Store a preview field for reference (Meta shows ~125 chars before "...See More")
+    if len(pt) > max_visible:
+        ad["primary_text_preview"] = pt[: max_visible - 3].rstrip() + "..."
 
 
 class AdGenerator:
@@ -107,7 +111,7 @@ class AdGenerator:
                 system = system + snippet
         creative_angle_suffix = ("\nCreative approach for this variant: " + creative_angle) if creative_angle else ""
         additional_context = brief.get("additional_context", "")
-        additional_context_suffix = ("\n\nAdditional context from the user:\n" + additional_context) if additional_context else ""
+        additional_context_suffix = ("\n\nIMPORTANT — The user gave these specific creative directions (you MUST follow them):\n" + additional_context) if additional_context else ""
         user = AD_GENERATION_USER.format(
             audience=brief.get("audience", "Parents of high school students"),
             product=brief.get("product", "SAT tutoring program"),
