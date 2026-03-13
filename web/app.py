@@ -1312,7 +1312,7 @@ INDEX_HTML = """
       if (fname.endsWith('.json')) {
         fetch('/api/result/ads_dataset').then(function(r) { return r.json(); }).then(function(data) {
           var pretty = JSON.stringify(data, null, 2);
-          if (pretty.length > 10000) pretty = pretty.slice(0, 10000) + '\n\n... (truncated)';
+          if (pretty.length > 10000) pretty = pretty.slice(0, 10000) + '\\n\\n... (truncated)';
           container.innerHTML = '<pre class="bg-slate-50 border border-slate-200 rounded-lg p-4 text-xs text-slate-700 whitespace-pre-wrap max-h-96 overflow-y-auto font-mono">' + esc(pretty) + '</pre>';
           container.setAttribute('data-loaded', '1');
         });
@@ -1546,7 +1546,7 @@ INDEX_HTML = """
             .then(function(data) {
               var statusEl = item.querySelector('.dream-extract-status');
               if (data.ok && data.text) {
-                _dreamExtractedText += '\n\n--- From ' + (file.name || 'PDF') + ' ---\n' + data.text;
+                _dreamExtractedText += '\\n\\n--- From ' + (file.name || 'PDF') + ' ---\\n' + data.text;
                 if (statusEl) { statusEl.textContent = 'Extracted'; statusEl.className = 'text-xs text-green-600 font-medium'; }
                 showDreamExtracted();
               } else {
@@ -1564,7 +1564,7 @@ INDEX_HTML = """
       var textEl = document.getElementById('dreamExtractedText');
       if (_dreamExtractedText.trim()) {
         preview.classList.remove('hidden');
-        textEl.textContent = _dreamExtractedText.trim().slice(0, 3000) + (_dreamExtractedText.length > 3000 ? '\n...(truncated)' : '');
+        textEl.textContent = _dreamExtractedText.trim().slice(0, 3000) + (_dreamExtractedText.length > 3000 ? '\\n...(truncated)' : '');
       }
     }
     // Remove file handler
@@ -1587,7 +1587,7 @@ INDEX_HTML = """
         .then(function(data) {
           self.textContent = 'Fetch'; self.disabled = false;
           if (data.ok && data.text) {
-            _dreamExtractedText += '\n\n--- From URL ---\n' + data.text;
+            _dreamExtractedText += '\\n\\n--- From URL ---\\n' + data.text;
             showDreamExtracted();
           } else {
             alert(data.error || 'Failed to fetch PDF');
@@ -1600,7 +1600,7 @@ INDEX_HTML = """
       if (!_dreamAdId) return;
       var adId = _dreamAdId;
       var userContext = (document.getElementById('dreamContext').value || '').trim();
-      if (_dreamExtractedText.trim()) userContext += '\n\nReference material:\n' + _dreamExtractedText.trim();
+      if (_dreamExtractedText.trim()) userContext += '\\n\\nReference material:\\n' + _dreamExtractedText.trim();
       closeDreamPanel();
       // Now show the loading skeleton and fire the improve request
       var currentAd = allCompletedAds.find(function(a) { return (a.id || a.ad_id) === adId; });
