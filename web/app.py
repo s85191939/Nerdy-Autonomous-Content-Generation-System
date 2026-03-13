@@ -592,6 +592,7 @@ INDEX_HTML = """
       <nav class="flex items-center gap-1">
         <a href="/" class="px-3 py-1.5 text-sm font-medium rounded-lg bg-primary-50 text-primary-700">Generator</a>
         <a href="/dashboard" class="px-3 py-1.5 text-sm font-medium rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-800 transition-colors">Campaigns</a>
+        <span class="px-3 py-1.5 text-sm font-medium rounded-lg text-slate-400 cursor-not-allowed select-none" title="Coming soon">Studio <span class="text-[10px] bg-slate-100 text-slate-400 px-1.5 py-0.5 rounded-md ml-0.5 uppercase tracking-wider">TBA</span></span>
       </nav>
     </div>
   </header>
@@ -1627,6 +1628,7 @@ DASHBOARD_HTML = """
       <nav class="flex items-center gap-1">
         <a href="/" class="px-3 py-1.5 text-sm font-medium rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-800 transition-colors">Generator</a>
         <a href="/dashboard" class="px-3 py-1.5 text-sm font-medium rounded-lg bg-primary-50 text-primary-700">Campaigns</a>
+        <span class="px-3 py-1.5 text-sm font-medium rounded-lg text-slate-400 cursor-not-allowed select-none" title="Coming soon">Studio <span class="text-[10px] bg-slate-100 text-slate-400 px-1.5 py-0.5 rounded-md ml-0.5 uppercase tracking-wider">TBA</span></span>
       </nav>
     </div>
   </header>
