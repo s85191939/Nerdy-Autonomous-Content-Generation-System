@@ -1,4 +1,4 @@
-"""Web interface for Nerdy Autonomous Ad Engine."""
+"""Web interface for Facebook Ad Engine."""
 
 import os
 import sys
@@ -74,16 +74,22 @@ def api_run():
         dimension_weights = None
     output_dir = str(ROOT / "output")
     custom_brief = None
-    if any(data.get(k) for k in ("audience", "product", "goal", "tone", "brand_name")):
-        custom_brief = {
-            "audience": (data.get("audience") or "").strip() or "Parents of high school students",
-            "product": (data.get("product") or "").strip() or "SAT tutoring program",
-            "goal": (data.get("goal") or "").strip() or "conversion",
-            "tone": (data.get("tone") or "").strip() or "reassuring, results-focused",
-        }
-        brand_name = (data.get("brand_name") or "").strip()
-        if brand_name:
-            custom_brief["brand_name"] = brand_name
+    # All brief fields are required (validated client-side)
+    audience = (data.get("audience") or "").strip()
+    product = (data.get("product") or "").strip()
+    goal = (data.get("goal") or "").strip()
+    brand_name = (data.get("brand_name") or "").strip()
+    tone = (data.get("tone") or "").strip()
+    if not all([audience, product, goal, brand_name]):
+        return jsonify({"ok": False, "error": "Brand name, audience, product, and goal are required"}), 400
+    custom_brief = {
+        "audience": audience,
+        "product": product,
+        "goal": goal,
+        "brand_name": brand_name,
+    }
+    if tone:
+        custom_brief["tone"] = tone
 
     # Optional: set API keys from request (not persisted; used only for this process)
     api_key = (data.get("api_key") or "").strip()
@@ -475,7 +481,7 @@ INDEX_HTML = """
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Nerdy Ad Engine — AI Ad Copy for Facebook & Instagram</title>
+  <title>Facebook Ad Engine — AI Ad Copy for Facebook & Instagram</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet">
@@ -525,7 +531,7 @@ INDEX_HTML = """
   <header class="border-b border-slate-200/80 bg-white/90 backdrop-blur-sm sticky top-0 z-10">
     <div class="max-w-4xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
       <div class="flex items-center gap-2">
-        <span class="text-xl font-bold tracking-tight text-slate-900">Nerdy</span>
+        <span class="text-xl font-bold tracking-tight text-slate-900">Facebook</span>
         <span class="text-xl font-semibold text-primary-600">Ad Engine</span>
         <span class="hidden sm:inline-flex items-center rounded-full bg-primary-50 text-primary-700 text-xs font-medium px-2 py-0.5 ml-1">AI-Powered</span>
       </div>
@@ -554,30 +560,30 @@ INDEX_HTML = """
     <section class="bg-white rounded-2xl shadow-sm border border-slate-200/80 overflow-hidden mb-6">
       <div class="px-6 py-5 border-b border-slate-100">
         <h2 class="text-lg font-semibold text-slate-900">Generate from a brief</h2>
-        <p class="text-sm text-slate-500 mt-0.5">Enter audience, product, and goal to generate ads. Add a brand name for custom brands. Leave blank to use default Varsity Tutors briefs.</p>
+        <p class="text-sm text-slate-500 mt-0.5">Enter your brand, audience, product, and goal to generate ads. All brief fields are required.</p>
       </div>
       <form id="form" class="p-6 space-y-5">
         <div class="bg-slate-50 rounded-lg p-4 border border-slate-200">
           <p class="text-sm font-semibold text-slate-800 mb-3">Brief (audience + product + goal)</p>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label for="brand_name" class="block text-sm font-medium text-slate-700 mb-1">Brand name <span class="text-slate-400 font-normal">(custom brand; leave blank for Varsity Tutors)</span></label>
-              <input type="text" id="brand_name" name="brand_name" placeholder="e.g. MovieMagic, Nike, Acme Corp"
+              <label for="brand_name" class="block text-sm font-medium text-slate-700 mb-1">Brand name <span class="text-red-500">*</span></label>
+              <input type="text" id="brand_name" name="brand_name" placeholder="e.g. MovieMagic, Nike, Acme Corp" required
                 class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
             </div>
             <div>
-              <label for="audience" class="block text-sm font-medium text-slate-700 mb-1">Audience</label>
-              <input type="text" id="audience" name="audience" placeholder="e.g. Parents of high school juniors"
+              <label for="audience" class="block text-sm font-medium text-slate-700 mb-1">Audience <span class="text-red-500">*</span></label>
+              <input type="text" id="audience" name="audience" placeholder="e.g. Parents of high school juniors" required
                 class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
             </div>
             <div>
-              <label for="product" class="block text-sm font-medium text-slate-700 mb-1">Product / offer</label>
-              <input type="text" id="product" name="product" placeholder="e.g. SAT tutoring program"
+              <label for="product" class="block text-sm font-medium text-slate-700 mb-1">Product / offer <span class="text-red-500">*</span></label>
+              <input type="text" id="product" name="product" placeholder="e.g. SAT tutoring program" required
                 class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
             </div>
             <div>
-              <label for="goal" class="block text-sm font-medium text-slate-700 mb-1">Goal</label>
-              <input type="text" id="goal" name="goal" placeholder="e.g. conversion or awareness"
+              <label for="goal" class="block text-sm font-medium text-slate-700 mb-1">Goal <span class="text-red-500">*</span></label>
+              <input type="text" id="goal" name="goal" placeholder="e.g. conversion or awareness" required
                 class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
             </div>
             <div>
@@ -782,7 +788,7 @@ INDEX_HTML = """
 
   <footer class="border-t border-slate-200 mt-12 py-6">
     <div class="max-w-4xl mx-auto px-4 sm:px-6 text-center text-sm text-slate-500">
-      Nerdy Ad Engine — autonomous generation and evaluation for Varsity Tutors / Nerdy.
+      Facebook Ad Engine for copy that actually works.
     </div>
   </footer>
 
@@ -1186,6 +1192,7 @@ INDEX_HTML = """
       const qualityThresholdEl = document.getElementById('quality_threshold');
       const quality_threshold = qualityThresholdEl && qualityThresholdEl.value ? parseFloat(qualityThresholdEl.value) : undefined;
       const enable_image_gen = !!(document.getElementById('enable_image_gen') && document.getElementById('enable_image_gen').checked);
+      if (!brand_name || !audience || !product || !goal) { alert('Please fill in all required fields: Brand name, Audience, Product, and Goal.'); return; }
       runBtn.disabled = true;
       runLabel.textContent = 'Running…';
       runIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>';
@@ -1318,7 +1325,7 @@ DASHBOARD_HTML = """
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ROI Dashboard — Nerdy Ad Engine</title>
+  <title>ROI Dashboard — Facebook Ad Engine</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
@@ -1330,7 +1337,7 @@ DASHBOARD_HTML = """
   <header class="border-b border-slate-200/80 bg-white/90 backdrop-blur-sm sticky top-0 z-10">
     <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
       <div class="flex items-center gap-2">
-        <span class="text-xl font-bold tracking-tight text-slate-900">Nerdy</span>
+        <span class="text-xl font-bold tracking-tight text-slate-900">Facebook</span>
         <span class="text-xl font-semibold text-primary-600">Ad Engine</span>
       </div>
       <nav class="flex items-center gap-1">
