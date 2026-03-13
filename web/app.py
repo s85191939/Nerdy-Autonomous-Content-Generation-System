@@ -649,7 +649,7 @@ INDEX_HTML = """
           </div>
           <!-- Additional context textarea -->
           <div class="mt-4">
-            <label for="additional_context" class="block text-sm font-medium text-slate-700 mb-1">Dream panel (optional)</label>
+            <label for="additional_context" class="block text-sm font-medium text-slate-700 mb-1">Dream panel <span class="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-md ml-1 uppercase tracking-wider font-semibold">Experimental</span></label>
             <textarea id="additional_context" name="additional_context" rows="3"
               placeholder="Paste any extra info here — brand guidelines, reference copy, competitor ads, landing page text, key selling points, or anything else the AI should know..."
               class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm resize-y"></textarea>
