@@ -88,7 +88,7 @@ def api_run():
     # Optional: set API keys from request (not persisted; used only for this process)
     api_key = (data.get("api_key") or "").strip()
     openrouter_key = (data.get("openrouter_api_key") or "").strip()
-    openrouter_model = (data.get("openrouter_model") or "").strip() or "openrouter/free"
+    openrouter_model = (data.get("openrouter_model") or "").strip() or "google/gemini-2.0-flash-001"
     openai_key = (data.get("openai_api_key") or "").strip()
     if api_key:
         os.environ["GEMINI_API_KEY"] = api_key
@@ -652,7 +652,7 @@ INDEX_HTML = """
                   </div>
                   <div>
                     <label for="openrouter_model" class="block text-sm font-medium text-slate-600 mb-1">Model</label>
-                    <input type="text" id="openrouter_model" name="openrouter_model" value="openrouter/free" placeholder="openrouter/free"
+                    <input type="text" id="openrouter_model" name="openrouter_model" value="google/gemini-2.0-flash-001" placeholder="google/gemini-2.0-flash-001"
                       class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
                   </div>
                 </div>
@@ -1174,7 +1174,7 @@ INDEX_HTML = """
       const api_key = (document.getElementById('api_key') && document.getElementById('api_key').value) ? document.getElementById('api_key').value.trim() : '';
       const openai_api_key = (document.getElementById('openai_api_key') && document.getElementById('openai_api_key').value) ? document.getElementById('openai_api_key').value.trim() : '';
       const openrouter_api_key = (document.getElementById('openrouter_api_key') && document.getElementById('openrouter_api_key').value) ? document.getElementById('openrouter_api_key').value.trim() : '';
-      const openrouter_model = (document.getElementById('openrouter_model') && document.getElementById('openrouter_model').value) ? document.getElementById('openrouter_model').value.trim() : 'openrouter/free';
+      const openrouter_model = (document.getElementById('openrouter_model') && document.getElementById('openrouter_model').value) ? document.getElementById('openrouter_model').value.trim() : 'google/gemini-2.0-flash-001';
       const num_ads = parseInt(document.getElementById('num_ads').value, 10) || 5;
       const max_iterations = parseInt(document.getElementById('max_iterations').value, 10) || 1;
       const seed = parseInt(document.getElementById('seed').value, 10) || 42;

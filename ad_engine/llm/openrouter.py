@@ -22,7 +22,7 @@ class OpenRouterModel:
     or a specific model id (e.g. meta-llama/llama-3.3-70b-instruct:free).
     """
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "openrouter/free"):
+    def __init__(self, api_key: Optional[str] = None, model: str = "google/gemini-2.0-flash-001"):
         self._api_key = (api_key or os.environ.get("OPENROUTER_API_KEY") or "").strip()
         if not self._api_key:
             raise ValueError("OPENROUTER_API_KEY is required for OpenRouter backend.")
@@ -61,7 +61,7 @@ class OpenRouterModel:
             f"{OPENROUTER_BASE}/chat/completions",
             json=payload,
             headers=headers,
-            timeout=120,
+            timeout=30,
         )
         r.raise_for_status()
         data = r.json()
