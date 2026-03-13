@@ -179,11 +179,13 @@ class AdGenerator:
                 )
                 system = system + snippet
 
+        additional_context = brief.get("additional_context", "")
+        additional_context_block = ("\n\nIMPORTANT — The user gave these specific creative directions (you MUST follow them for EVERY ad):\n" + additional_context) if additional_context else ""
         user = f"""Audience: {brief.get("audience", "Parents of high school students")}
 Product/offer: {brief.get("product", "SAT tutoring program")}
 Goal: {brief.get("goal", "conversion")}
 Tone: {brief.get("tone", "reassuring, results-focused")}
-
+{additional_context_block}
 Generate exactly {n} UNIQUE Facebook/Instagram ads. Each ad must use a DIFFERENT hook type.
 Return a JSON array of {n} objects. Each object has keys: primary_text, headline, description, cta.
 Return ONLY the JSON array, no other text."""
