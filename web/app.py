@@ -60,7 +60,7 @@ def api_run():
         return jsonify({"ok": False, "error": "A run is already in progress"}), 409
     data = request.get_json(force=True, silent=True) or {}
     num_ads = min(max(1, int(data.get("num_ads", 5))), 100)
-    max_iterations = min(max(1, int(data.get("max_iterations", 1))), 10)
+    max_iterations = min(max(1, int(data.get("max_iterations", 3))), 10)
     seed = int(data.get("seed", 42))
     enable_image_gen = bool(data.get("enable_image_gen"))
     quality_threshold = data.get("quality_threshold")
@@ -601,7 +601,7 @@ INDEX_HTML = """
                 class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
             </div>
             <div>
-              <label for="quality_threshold" class="block text-sm font-medium text-slate-700 mb-1.5">Quality threshold <span class="text-slate-400 font-normal">(min score)</span></label>
+              <label for="quality_threshold" class="block text-sm font-medium text-slate-700 mb-1.5">Quality target</label>
               <input type="number" id="quality_threshold" name="quality_threshold" step="0.1" min="1" max="10" value="7.0"
                 class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
             </div>
@@ -622,7 +622,7 @@ INDEX_HTML = """
           </summary>
           <div class="mt-4 space-y-5">
             <!-- max_iterations hidden: use "Make it better" to iterate manually -->
-            <input type="hidden" id="max_iterations" name="max_iterations" value="1">
+            <input type="hidden" id="max_iterations" name="max_iterations" value="3">
             <div class="grid grid-cols-2 gap-4">
               <div>
                 <label for="seed" class="block text-sm font-medium text-slate-700 mb-1.5">Random seed</label>

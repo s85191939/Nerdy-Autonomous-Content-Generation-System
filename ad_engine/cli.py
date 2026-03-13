@@ -146,7 +146,7 @@ def _run_pipeline_body(num_ads, max_iterations, out_dir, seed, progress_callback
 
     # ── FAST BATCH PATH with auto-iteration ──
     # Generate N ads in one batch, evaluate all, then iterate any below threshold until they pass.
-    MAX_IMPROVE_CYCLES = max(0, max_iterations - 1)  # respect max_iterations param (1 iter = generate only)
+    MAX_IMPROVE_CYCLES = min(max(0, max_iterations - 1), 3)  # cap at 3 cycles: fast but still allows quality improvement
     use_batch = (not enable_image_gen and num_variants <= 1)
     if use_batch:
         if progress_callback:
