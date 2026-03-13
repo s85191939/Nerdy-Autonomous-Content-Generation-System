@@ -84,7 +84,7 @@ AD_GENERATION_USER = """Audience: {audience}
 Product/offer: {product}
 Goal: {goal}
 Tone: {tone}
-{creative_angle_suffix}
+{creative_angle_suffix}{additional_context_suffix}
 Generate one Facebook/Instagram ad. Return only a single JSON object with keys: primary_text, headline, description, cta."""
 
 VARIANT_ANGLES = [
@@ -182,7 +182,7 @@ IMPROVEMENT_USER = """Previous ad:
 
 Evaluation: The ad scored below 7.0. Weakest dimension: {weak_dimension}.
 Rationale: {rationale}
-
+{user_context_suffix}
 Improve the ad specifically to strengthen {weak_dimension}. Keep primary_text, headline, description, and cta. Return only the improved ad as a single JSON object with keys: primary_text, headline, description, cta."""
 
 COMPETITOR_PATTERNS_SYSTEM = "You analyze FB/IG ad copy and extract hook patterns, CTAs, and tone angles."

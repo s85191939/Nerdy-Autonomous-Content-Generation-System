@@ -90,6 +90,9 @@ def api_run():
     }
     if tone:
         custom_brief["tone"] = tone
+    additional_context = (data.get("additional_context") or "").strip()
+    if additional_context:
+        custom_brief["additional_context"] = additional_context
 
     # Optional: set API keys from request (not persisted; used only for this process)
     api_key = (data.get("api_key") or "").strip()
@@ -285,7 +288,7 @@ def api_result_evaluation_report():
 
 @app.route("/api/improve_ad", methods=["POST"])
 def api_improve_ad():
-    """Run one improvement step on a single ad (from last run's output). Body: { ad_id, quality_threshold? }."""
+    """Run one improvement step on a single ad. Body: { ad_id, quality_threshold?, user_context? }."""
     if _run_state["status"] == "running":
         return jsonify({"ok": False, "error": "A run is in progress"}), 409
     data = request.get_json(force=True, silent=True) or {}
@@ -297,10 +300,61 @@ def api_improve_ad():
         qt = float(qt) if qt is not None else None
     except (TypeError, ValueError):
         qt = None
-    updated = improve_single_ad(ad_id, str(ROOT / "output"), quality_threshold=qt)
+    user_context = (data.get("user_context") or "").strip() or None
+    updated = improve_single_ad(ad_id, str(ROOT / "output"), quality_threshold=qt, user_context=user_context)
     if updated is None:
         return jsonify({"ok": False, "error": "Ad not found or no run output"}), 404
     return jsonify({"ok": True, "ad": updated})
+
+
+@app.route("/api/extract_pdf", methods=["POST"])
+def api_extract_pdf():
+    """Extract text from an uploaded PDF file. Returns { ok, text }."""
+    if "file" not in request.files:
+        return jsonify({"ok": False, "error": "No file uploaded"}), 400
+    f = request.files["file"]
+    if not f.filename or not f.filename.lower().endswith(".pdf"):
+        return jsonify({"ok": False, "error": "Only PDF files are supported"}), 400
+    try:
+        import PyPDF2
+        reader = PyPDF2.PdfReader(f.stream)
+        text_parts = []
+        for page in reader.pages[:50]:  # cap at 50 pages
+            t = page.extract_text()
+            if t:
+                text_parts.append(t.strip())
+        text = "\n\n".join(text_parts)
+        if len(text) > 20000:
+            text = text[:20000] + "\n\n[...truncated at 20,000 characters]"
+        return jsonify({"ok": True, "text": text})
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"PDF extraction failed: {e}"}), 500
+
+
+@app.route("/api/fetch_pdf_url", methods=["POST"])
+def api_fetch_pdf_url():
+    """Fetch a PDF from a URL and extract text. Body: { url }."""
+    data = request.get_json(force=True, silent=True) or {}
+    url = (data.get("url") or "").strip()
+    if not url:
+        return jsonify({"ok": False, "error": "URL is required"}), 400
+    try:
+        import PyPDF2
+        import io
+        r = __import__("requests").get(url, timeout=15, headers={"User-Agent": "FacebookAdEngine/1.0"})
+        r.raise_for_status()
+        reader = PyPDF2.PdfReader(io.BytesIO(r.content))
+        text_parts = []
+        for page in reader.pages[:50]:
+            t = page.extract_text()
+            if t:
+                text_parts.append(t.strip())
+        text = "\n\n".join(text_parts)
+        if len(text) > 20000:
+            text = text[:20000] + "\n\n[...truncated at 20,000 characters]"
+        return jsonify({"ok": True, "text": text})
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"Failed to fetch/extract PDF: {e}"}), 500
 
 
 @app.route("/api/run_history")
@@ -592,6 +646,23 @@ INDEX_HTML = """
                 class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
             </div>
           </div>
+          <!-- Additional context textarea -->
+          <div class="mt-4">
+            <label for="additional_context" class="block text-sm font-medium text-slate-700 mb-1">Dream panel (optional)</label>
+            <textarea id="additional_context" name="additional_context" rows="3"
+              placeholder="Paste any extra info here — brand guidelines, reference copy, competitor ads, landing page text, key selling points, or anything else the AI should know..."
+              class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm resize-y"></textarea>
+            <p class="text-xs text-slate-400 mt-1">The more context you provide, the better the ads. Paste URLs, brand docs, or reference copy.</p>
+          </div>
+          <!-- PDF / file upload for context -->
+          <div class="mt-3">
+            <div id="contextFileZone" class="border-2 border-dashed border-slate-300 rounded-lg p-4 text-center cursor-pointer hover:border-primary-400 hover:bg-primary-50/30 transition-colors">
+              <svg class="w-6 h-6 mx-auto text-slate-400 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+              <p class="text-xs text-slate-500">Drop a PDF or image here for extra context, or <span class="text-primary-600 font-medium">click to upload</span></p>
+              <input type="file" id="contextFileInput" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp" class="hidden">
+            </div>
+            <div id="contextFileList" class="mt-2 space-y-1 hidden"></div>
+          </div>
         </div>
         <!-- v2: Image generation toggle (hidden — v1 focus) -->
         <div class="hidden">
@@ -775,16 +846,78 @@ INDEX_HTML = """
       <div class="overflow-x-auto"><table id="scoresTable" class="w-full text-sm text-left border-collapse"></table></div>
     </section>
 
-    <!-- Output files (hidden by default) -->
+    <!-- Output files (hidden by default) — click to expand preview -->
     <section id="outputsCard" class="hidden bg-white rounded-2xl shadow-sm border border-slate-200/80 overflow-hidden">
       <div class="px-6 py-4 border-b border-slate-100">
-        <h3 class="text-lg font-semibold text-slate-900">Downloads</h3>
-        <p id="outputsRunInfo" class="text-sm text-slate-600 mt-0.5">Current run — same data as shown above.</p>
+        <h3 class="text-lg font-semibold text-slate-900">Campaign outputs</h3>
+        <p id="outputsRunInfo" class="text-sm text-slate-600 mt-0.5">Current run — click any file to preview, or download directly.</p>
         <p class="text-xs text-slate-500 mt-0.5">All runs and their downloads are also on the <a href="/dashboard" class="text-primary-600 hover:underline">Dashboard</a>.</p>
       </div>
-      <ul id="outputList" class="divide-y divide-slate-100"></ul>
+      <div id="outputList" class="divide-y divide-slate-100"></div>
     </section>
   </main>
+
+  <!-- Dream Panel: slide-out side panel for "Make it better" with context input -->
+  <div id="dreamPanelOverlay" class="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 hidden transition-opacity duration-200 opacity-0">
+    <div id="dreamPanel" class="absolute right-0 top-0 h-full w-full max-w-md bg-white shadow-2xl flex flex-col translate-x-full transition-transform duration-300 ease-out">
+      <!-- Panel header -->
+      <div class="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-gradient-to-r from-primary-50 to-white">
+        <div>
+          <h3 class="text-lg font-bold text-slate-900">Improve Ad</h3>
+          <p class="text-xs text-slate-500 mt-0.5" id="dreamPanelAdId"></p>
+        </div>
+        <button id="dreamPanelClose" class="p-2 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <!-- Panel body -->
+      <div class="flex-1 overflow-y-auto p-6 space-y-5">
+        <!-- Instructions text input -->
+        <div>
+          <label class="block text-sm font-semibold text-slate-800 mb-1.5">What should the AI focus on?</label>
+          <textarea id="dreamContext" rows="4"
+            placeholder="e.g. Make the headline punchier, use more urgency, target millennials instead, emphasize free trial..."
+            class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm resize-y"></textarea>
+          <p class="text-xs text-slate-400 mt-1">Give specific instructions for how you want this ad improved.</p>
+        </div>
+        <!-- File drop zone -->
+        <div>
+          <label class="block text-sm font-semibold text-slate-800 mb-1.5">Reference material (optional)</label>
+          <div id="dreamDropZone" class="border-2 border-dashed border-slate-300 rounded-lg p-5 text-center cursor-pointer hover:border-primary-400 hover:bg-primary-50/30 transition-colors relative">
+            <svg class="w-8 h-8 mx-auto text-slate-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+            <p class="text-sm text-slate-600 font-medium">Drop files here</p>
+            <p class="text-xs text-slate-400 mt-1">PDF, images (PNG, JPG) — or <span class="text-primary-600 font-medium">click to browse</span></p>
+            <p class="text-xs text-slate-400 mt-0.5">You can also paste images with Ctrl+V / Cmd+V</p>
+            <input type="file" id="dreamFileInput" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp" multiple class="hidden">
+          </div>
+          <!-- Uploaded files list -->
+          <div id="dreamFileList" class="mt-2 space-y-2 hidden"></div>
+        </div>
+        <!-- PDF URL input -->
+        <div>
+          <label class="block text-sm font-semibold text-slate-800 mb-1.5">Or paste a PDF URL</label>
+          <div class="flex gap-2">
+            <input type="text" id="dreamPdfUrl" placeholder="https://example.com/brand-guide.pdf"
+              class="flex-1 rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
+            <button type="button" id="dreamFetchPdf" class="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-sm font-medium hover:bg-slate-200 transition-colors shrink-0">Fetch</button>
+          </div>
+        </div>
+        <!-- Extracted text preview -->
+        <div id="dreamExtractedPreview" class="hidden">
+          <label class="block text-sm font-semibold text-slate-800 mb-1.5">Extracted context</label>
+          <div id="dreamExtractedText" class="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-600 max-h-40 overflow-y-auto whitespace-pre-wrap font-mono"></div>
+        </div>
+      </div>
+      <!-- Panel footer -->
+      <div class="px-6 py-4 border-t border-slate-200 bg-white">
+        <button type="button" id="dreamSubmitBtn"
+          class="w-full inline-flex items-center justify-center gap-2 px-6 py-3 bg-primary-600 text-white font-semibold rounded-lg shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed transition-colors text-sm">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+          <span>Improve this ad</span>
+        </button>
+      </div>
+    </div>
+  </div>
 
   <footer class="border-t border-slate-200 mt-12 py-6">
     <div class="max-w-4xl mx-auto px-4 sm:px-6 text-center text-sm text-slate-500">
@@ -1108,22 +1241,96 @@ INDEX_HTML = """
               runInfoEl.textContent = 'Current run: ' + runId;
             }
           } else {
-            runInfoEl.textContent = 'Same data as shown above. Download when you need the files.';
+            runInfoEl.textContent = 'Click any file to preview, or download directly.';
           }
         }
-        outputList.innerHTML = files.map(f => {
-          const size = f.size ? (Math.round(f.size / 1024) + ' KB') : '';
-          const desc = (f.description || '').trim();
-          return '<li class="px-6 py-3 hover:bg-slate-50/80">' +
-            '<div class="flex items-center justify-between gap-4">' +
-              '<a href="/api/output/' + esc(f.name) + '" download class="font-medium text-primary-600 hover:text-primary-700 truncate">' + esc(f.name) + '</a>' +
-              '<span class="text-sm text-slate-400 shrink-0">' + size + '</span>' +
+        var fileIconMap = {
+          'ads_dataset.json': '<svg class="w-5 h-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>',
+          'evaluation_report.csv': '<svg class="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>',
+          'evaluation_summary.txt': '<svg class="w-5 h-5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>',
+          'iteration_quality_chart.png': '<svg class="w-5 h-5 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>'
+        };
+        outputList.innerHTML = files.map(function(f) {
+          var size = f.size ? (Math.round(f.size / 1024) + ' KB') : '';
+          var desc = (f.description || '').trim();
+          var icon = fileIconMap[f.name] || fileIconMap['evaluation_summary.txt'];
+          return '<div class="output-file-item">' +
+            '<div class="px-6 py-4 flex items-center gap-4 cursor-pointer hover:bg-slate-50/80 transition-colors output-file-header" data-filename="' + esc(f.name) + '">' +
+              '<div class="shrink-0">' + icon + '</div>' +
+              '<div class="flex-1 min-w-0">' +
+                '<p class="font-medium text-slate-900 text-sm">' + esc(f.name) + '</p>' +
+                (desc ? '<p class="text-xs text-slate-500 mt-0.5">' + esc(desc) + '</p>' : '') +
+              '</div>' +
+              '<div class="flex items-center gap-3 shrink-0">' +
+                '<span class="text-xs text-slate-400">' + size + '</span>' +
+                '<a href="/api/output/' + esc(f.name) + '" download class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-primary-50 text-primary-700 text-xs font-medium hover:bg-primary-100 transition-colors" onclick="event.stopPropagation()">' +
+                  '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>' +
+                  'Download' +
+                '</a>' +
+                '<svg class="w-4 h-4 text-slate-400 output-chevron transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>' +
+              '</div>' +
             '</div>' +
-            (desc ? '<p class="text-xs text-slate-500 mt-1">' + esc(desc) + '</p>' : '') +
-          '</li>';
+            '<div class="output-file-preview hidden px-6 pb-4" data-preview-for="' + esc(f.name) + '"></div>' +
+          '</div>';
         }).join('');
         showOutputs(files.length > 0);
+        // Attach expand/collapse handlers
+        outputList.querySelectorAll('.output-file-header').forEach(function(header) {
+          header.addEventListener('click', function() {
+            var fname = header.getAttribute('data-filename');
+            var preview = outputList.querySelector('[data-preview-for="' + fname + '"]');
+            var chevron = header.querySelector('.output-chevron');
+            if (!preview) return;
+            if (!preview.classList.contains('hidden')) {
+              preview.classList.add('hidden');
+              if (chevron) chevron.style.transform = '';
+              return;
+            }
+            preview.classList.remove('hidden');
+            if (chevron) chevron.style.transform = 'rotate(180deg)';
+            if (preview.getAttribute('data-loaded')) return;
+            preview.innerHTML = '<div class="flex items-center gap-2 py-3"><svg class="w-4 h-4 text-slate-400 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg><span class="text-sm text-slate-500">Loading preview...</span></div>';
+            loadOutputPreview(fname, preview);
+          });
+        });
       });
+    }
+    function loadOutputPreview(fname, container) {
+      if (fname.endsWith('.png')) {
+        container.innerHTML = '<img src="/api/output/' + esc(fname) + '?inline=1&t=' + Date.now() + '" alt="' + esc(fname) + '" class="max-w-full h-auto rounded-lg border border-slate-200">';
+        container.setAttribute('data-loaded', '1');
+        return;
+      }
+      if (fname.endsWith('.txt')) {
+        fetch('/api/result/summary').then(function(r) { return r.ok ? r.text() : 'Could not load file'; }).then(function(text) {
+          container.innerHTML = '<pre class="bg-slate-50 border border-slate-200 rounded-lg p-4 text-xs text-slate-700 whitespace-pre-wrap max-h-80 overflow-y-auto font-mono">' + esc(text) + '</pre>';
+          container.setAttribute('data-loaded', '1');
+        });
+        return;
+      }
+      if (fname.endsWith('.json')) {
+        fetch('/api/result/ads_dataset').then(function(r) { return r.json(); }).then(function(data) {
+          var pretty = JSON.stringify(data, null, 2);
+          if (pretty.length > 10000) pretty = pretty.slice(0, 10000) + '\n\n... (truncated)';
+          container.innerHTML = '<pre class="bg-slate-50 border border-slate-200 rounded-lg p-4 text-xs text-slate-700 whitespace-pre-wrap max-h-96 overflow-y-auto font-mono">' + esc(pretty) + '</pre>';
+          container.setAttribute('data-loaded', '1');
+        });
+        return;
+      }
+      if (fname.endsWith('.csv')) {
+        fetch('/api/result/evaluation_report').then(function(r) { return r.json(); }).then(function(rows) {
+          if (!rows || !rows.length) { container.innerHTML = '<p class="text-sm text-slate-500 py-2">Empty file</p>'; container.setAttribute('data-loaded', '1'); return; }
+          var cols = Object.keys(rows[0]);
+          container.innerHTML = '<div class="overflow-x-auto max-h-80"><table class="w-full text-xs text-left border-collapse">' +
+            '<thead class="bg-slate-100 sticky top-0"><tr>' + cols.map(function(c) { return '<th class="px-3 py-2 font-semibold text-slate-600 border-b border-slate-200">' + esc(c) + '</th>'; }).join('') + '</tr></thead>' +
+            '<tbody>' + rows.map(function(row, i) { return '<tr class="' + (i % 2 ? 'bg-slate-50/50' : '') + '">' + cols.map(function(c) { return '<td class="px-3 py-1.5 text-slate-700 border-b border-slate-100">' + esc(String(row[c] != null ? row[c] : '')) + '</td>'; }).join('') + '</tr>'; }).join('') +
+            '</tbody></table></div>';
+          container.setAttribute('data-loaded', '1');
+        });
+        return;
+      }
+      container.innerHTML = '<p class="text-sm text-slate-500 py-2">Preview not available for this file type.</p>';
+      container.setAttribute('data-loaded', '1');
     }
 
     function showEl(id, show) {
@@ -1192,6 +1399,8 @@ INDEX_HTML = """
       const qualityThresholdEl = document.getElementById('quality_threshold');
       const quality_threshold = qualityThresholdEl && qualityThresholdEl.value ? parseFloat(qualityThresholdEl.value) : undefined;
       const enable_image_gen = !!(document.getElementById('enable_image_gen') && document.getElementById('enable_image_gen').checked);
+      const additional_context_el = document.getElementById('additional_context');
+      const additional_context = (additional_context_el ? additional_context_el.value.trim() : '') + (window._contextFileText || '');
       if (!brand_name || !audience || !product || !goal) { alert('Please fill in all required fields: Brand name, Audience, Product, and Goal.'); return; }
       runBtn.disabled = true;
       runLabel.textContent = 'Running…';
@@ -1207,7 +1416,7 @@ INDEX_HTML = """
       fetch('/api/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ api_key: api_key || undefined, openai_api_key: openai_api_key || undefined, openrouter_api_key: openrouter_api_key || undefined, openrouter_model: openrouter_model || undefined, num_ads, max_iterations, seed, quality_threshold: quality_threshold || undefined, enable_image_gen, brand_name: brand_name || undefined, audience: audience || undefined, product: product || undefined, goal: goal || undefined, tone: tone || undefined })
+        body: JSON.stringify({ api_key: api_key || undefined, openai_api_key: openai_api_key || undefined, openrouter_api_key: openrouter_api_key || undefined, openrouter_model: openrouter_model || undefined, num_ads, max_iterations, seed, quality_threshold: quality_threshold || undefined, enable_image_gen, brand_name: brand_name || undefined, audience: audience || undefined, product: product || undefined, goal: goal || undefined, tone: tone || undefined, additional_context: additional_context || undefined })
       }).then(r => r.json()).then(data => {
         if (data.ok) pollTimer = setInterval(poll, 300);
         else { runBtn.disabled = false; runLabel.textContent = 'Run generator'; runIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>'; showProgress(false); alert(data.error || 'Failed to start'); }
@@ -1232,6 +1441,7 @@ INDEX_HTML = """
       renderGeneratedAdsPage(allCompletedAds, currentPage, PAGE_SIZE);
     });
 
+    // Open dream panel when "Make it better" is clicked
     if (generatedAdsList) generatedAdsList.addEventListener('click', function(e) {
       var btn = e.target && e.target.closest && e.target.closest('.improve-ad-btn');
       if (!btn) return;
@@ -1239,11 +1449,162 @@ INDEX_HTML = """
       e.stopPropagation();
       var adId = btn.getAttribute('data-ad-id');
       if (!adId) return;
-      // Find the ad's current iteration count
+      openDreamPanel(adId);
+    });
+
+    // Dream panel logic
+    var _dreamAdId = null;
+    var _dreamExtractedText = '';
+    var _dreamFiles = [];
+    function openDreamPanel(adId) {
+      _dreamAdId = adId;
+      _dreamExtractedText = '';
+      _dreamFiles = [];
+      var overlay = document.getElementById('dreamPanelOverlay');
+      var panel = document.getElementById('dreamPanel');
+      var adIdLabel = document.getElementById('dreamPanelAdId');
+      var ctx = document.getElementById('dreamContext');
+      var fileList = document.getElementById('dreamFileList');
+      var extractedPreview = document.getElementById('dreamExtractedPreview');
+      var pdfUrlInput = document.getElementById('dreamPdfUrl');
+      if (adIdLabel) adIdLabel.textContent = adId;
+      if (ctx) ctx.value = '';
+      if (fileList) { fileList.innerHTML = ''; fileList.classList.add('hidden'); }
+      if (extractedPreview) extractedPreview.classList.add('hidden');
+      if (pdfUrlInput) pdfUrlInput.value = '';
+      overlay.classList.remove('hidden');
+      requestAnimationFrame(function() {
+        overlay.classList.add('opacity-100');
+        overlay.classList.remove('opacity-0');
+        panel.classList.remove('translate-x-full');
+      });
+      document.body.style.overflow = 'hidden';
+    }
+    function closeDreamPanel() {
+      var overlay = document.getElementById('dreamPanelOverlay');
+      var panel = document.getElementById('dreamPanel');
+      panel.classList.add('translate-x-full');
+      overlay.classList.remove('opacity-100');
+      overlay.classList.add('opacity-0');
+      setTimeout(function() { overlay.classList.add('hidden'); document.body.style.overflow = ''; }, 300);
+      _dreamAdId = null;
+    }
+    document.getElementById('dreamPanelClose').addEventListener('click', closeDreamPanel);
+    document.getElementById('dreamPanelOverlay').addEventListener('click', function(e) {
+      if (e.target === this) closeDreamPanel();
+    });
+
+    // Dream panel file upload
+    var dreamDropZone = document.getElementById('dreamDropZone');
+    var dreamFileInput = document.getElementById('dreamFileInput');
+    dreamDropZone.addEventListener('click', function() { dreamFileInput.click(); });
+    dreamDropZone.addEventListener('dragover', function(e) { e.preventDefault(); e.stopPropagation(); this.classList.add('border-primary-400', 'bg-primary-50/30'); });
+    dreamDropZone.addEventListener('dragleave', function(e) { e.preventDefault(); e.stopPropagation(); this.classList.remove('border-primary-400', 'bg-primary-50/30'); });
+    dreamDropZone.addEventListener('drop', function(e) {
+      e.preventDefault(); e.stopPropagation();
+      this.classList.remove('border-primary-400', 'bg-primary-50/30');
+      if (e.dataTransfer.files.length) handleDreamFiles(e.dataTransfer.files);
+    });
+    dreamFileInput.addEventListener('change', function() { if (this.files.length) handleDreamFiles(this.files); this.value = ''; });
+
+    // Paste image support in dream panel
+    document.getElementById('dreamPanel').addEventListener('paste', function(e) {
+      var items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf('image') !== -1) {
+          var blob = items[i].getAsFile();
+          if (blob) handleDreamFiles([blob]);
+          break;
+        }
+      }
+    });
+
+    function handleDreamFiles(filesList) {
+      var fileListEl = document.getElementById('dreamFileList');
+      fileListEl.classList.remove('hidden');
+      Array.from(filesList).forEach(function(file) {
+        _dreamFiles.push(file);
+        var idx = _dreamFiles.length - 1;
+        var item = document.createElement('div');
+        item.className = 'flex items-center gap-2 bg-slate-50 rounded-lg px-3 py-2 border border-slate-200';
+        var isPdf = file.name && file.name.toLowerCase().endsWith('.pdf');
+        var isImage = file.type && file.type.startsWith('image/');
+        item.innerHTML =
+          '<span class="text-xs font-medium text-slate-700 truncate flex-1">' + esc(file.name || 'pasted-image.png') + ' <span class="text-slate-400">(' + Math.round(file.size / 1024) + ' KB)</span></span>' +
+          (isPdf ? '<span class="text-xs text-blue-600 font-medium dream-extract-status" data-idx="' + idx + '">Extracting...</span>' : '') +
+          (isImage ? '<span class="text-xs text-green-600 font-medium">Image attached</span>' : '') +
+          '<button type="button" class="text-slate-400 hover:text-red-500 dream-remove-file" data-idx="' + idx + '"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>';
+        fileListEl.appendChild(item);
+        // Extract PDF text
+        if (isPdf) {
+          var formData = new FormData();
+          formData.append('file', file);
+          fetch('/api/extract_pdf', { method: 'POST', body: formData })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+              var statusEl = item.querySelector('.dream-extract-status');
+              if (data.ok && data.text) {
+                _dreamExtractedText += '\n\n--- From ' + (file.name || 'PDF') + ' ---\n' + data.text;
+                if (statusEl) { statusEl.textContent = 'Extracted'; statusEl.className = 'text-xs text-green-600 font-medium'; }
+                showDreamExtracted();
+              } else {
+                if (statusEl) { statusEl.textContent = 'Failed'; statusEl.className = 'text-xs text-red-500 font-medium'; }
+              }
+            }).catch(function() {
+              var statusEl = item.querySelector('.dream-extract-status');
+              if (statusEl) { statusEl.textContent = 'Error'; statusEl.className = 'text-xs text-red-500 font-medium'; }
+            });
+        }
+      });
+    }
+    function showDreamExtracted() {
+      var preview = document.getElementById('dreamExtractedPreview');
+      var textEl = document.getElementById('dreamExtractedText');
+      if (_dreamExtractedText.trim()) {
+        preview.classList.remove('hidden');
+        textEl.textContent = _dreamExtractedText.trim().slice(0, 3000) + (_dreamExtractedText.length > 3000 ? '\n...(truncated)' : '');
+      }
+    }
+    // Remove file handler
+    document.getElementById('dreamFileList').addEventListener('click', function(e) {
+      var btn = e.target.closest('.dream-remove-file');
+      if (!btn) return;
+      btn.parentElement.remove();
+      if (!this.children.length) this.classList.add('hidden');
+    });
+    // Fetch PDF from URL
+    document.getElementById('dreamFetchPdf').addEventListener('click', function() {
+      var urlInput = document.getElementById('dreamPdfUrl');
+      var url = urlInput.value.trim();
+      if (!url) { alert('Enter a PDF URL'); return; }
+      this.textContent = 'Fetching...';
+      this.disabled = true;
+      var self = this;
+      fetch('/api/fetch_pdf_url', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: url }) })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          self.textContent = 'Fetch'; self.disabled = false;
+          if (data.ok && data.text) {
+            _dreamExtractedText += '\n\n--- From URL ---\n' + data.text;
+            showDreamExtracted();
+          } else {
+            alert(data.error || 'Failed to fetch PDF');
+          }
+        }).catch(function() { self.textContent = 'Fetch'; self.disabled = false; alert('Request failed'); });
+    });
+
+    // Dream panel submit — triggers the improve API with user context
+    document.getElementById('dreamSubmitBtn').addEventListener('click', function() {
+      if (!_dreamAdId) return;
+      var adId = _dreamAdId;
+      var userContext = (document.getElementById('dreamContext').value || '').trim();
+      if (_dreamExtractedText.trim()) userContext += '\n\nReference material:\n' + _dreamExtractedText.trim();
+      closeDreamPanel();
+      // Now show the loading skeleton and fire the improve request
       var currentAd = allCompletedAds.find(function(a) { return (a.id || a.ad_id) === adId; });
       var currentCycle = (currentAd && currentAd.iteration_count) ? currentAd.iteration_count : 1;
       var nextCycle = currentCycle + 1;
-      // Replace the ad card with a loading skeleton
       var cardWrapper = document.getElementById('ad-card-' + adId);
       if (cardWrapper) {
         var startTime = Date.now();
@@ -1262,9 +1623,9 @@ INDEX_HTML = """
               '<span>Cycle <strong class="text-primary-700">' + currentCycle + ' → ' + nextCycle + '</strong></span>' +
               '<span id="improve-timer-' + adId + '">0s</span>' +
             '</div>' +
-            '<p class="text-xs text-slate-400 mt-2">Evaluating weakest dimension, generating improved copy, re-scoring...</p>' +
+            (userContext ? '<p class="text-xs text-primary-600 mt-2 italic truncate max-w-xs mx-auto">With context: ' + esc(userContext.slice(0, 80)) + (userContext.length > 80 ? '...' : '') + '</p>' : '') +
+            '<p class="text-xs text-slate-400 mt-1">Evaluating weakest dimension, generating improved copy, re-scoring...</p>' +
           '</div>';
-        // Elapsed timer for improvement
         var timerEl = document.getElementById('improve-timer-' + adId);
         var timerInterval = setInterval(function() {
           if (!timerEl) { clearInterval(timerInterval); return; }
@@ -1274,14 +1635,12 @@ INDEX_HTML = """
       }
       var qtEl = document.getElementById('quality_threshold');
       var qt = qtEl && qtEl.value ? parseFloat(qtEl.value) : undefined;
-      fetch('/api/improve_ad', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad_id: adId, quality_threshold: qt }) })
+      fetch('/api/improve_ad', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad_id: adId, quality_threshold: qt, user_context: userContext || undefined }) })
         .then(function(r) { return r.json(); })
         .then(function(data) {
           if (data.ok && data.ad) {
             var idx = allCompletedAds.findIndex(function(a) { return (a.id || a.ad_id) === adId; });
-            if (idx >= 0) {
-              allCompletedAds[idx] = data.ad;
-            }
+            if (idx >= 0) { allCompletedAds[idx] = data.ad; }
             renderGeneratedAdsPage(allCompletedAds, currentPage, PAGE_SIZE);
           } else {
             alert(data.error || 'Improve failed');
@@ -1311,6 +1670,62 @@ INDEX_HTML = """
         var el = document.getElementById('rewriteResult'); el.classList.remove('hidden'); el.textContent = (d.ok && d.ad) ? JSON.stringify(d.ad, null, 2) : (d.error || 'Failed');
       });
     });
+    // --- Context file upload on initial form ---
+    window._contextFileText = '';
+    var contextFileZone = document.getElementById('contextFileZone');
+    var contextFileInput = document.getElementById('contextFileInput');
+    var contextFileList = document.getElementById('contextFileList');
+    if (contextFileZone && contextFileInput) {
+      contextFileZone.addEventListener('click', function() { contextFileInput.click(); });
+      contextFileZone.addEventListener('dragover', function(e) { e.preventDefault(); e.stopPropagation(); this.classList.add('border-primary-400', 'bg-primary-50/30'); });
+      contextFileZone.addEventListener('dragleave', function(e) { e.preventDefault(); e.stopPropagation(); this.classList.remove('border-primary-400', 'bg-primary-50/30'); });
+      contextFileZone.addEventListener('drop', function(e) {
+        e.preventDefault(); e.stopPropagation();
+        this.classList.remove('border-primary-400', 'bg-primary-50/30');
+        if (e.dataTransfer.files.length) handleContextFiles(e.dataTransfer.files);
+      });
+      contextFileInput.addEventListener('change', function() { if (this.files.length) handleContextFiles(this.files); this.value = ''; });
+    }
+    function handleContextFiles(filesList) {
+      contextFileList.classList.remove('hidden');
+      Array.from(filesList).forEach(function(file) {
+        var isPdf = file.name && file.name.toLowerCase().endsWith('.pdf');
+        var isImage = file.type && file.type.startsWith('image/');
+        var item = document.createElement('div');
+        item.className = 'flex items-center gap-2 bg-slate-50 rounded-lg px-3 py-2 border border-slate-200 text-xs';
+        item.innerHTML =
+          '<span class="font-medium text-slate-700 truncate flex-1">' + esc(file.name || 'pasted-image.png') + ' <span class="text-slate-400">(' + Math.round(file.size / 1024) + ' KB)</span></span>' +
+          (isPdf ? '<span class="ctx-status text-blue-600 font-medium">Extracting...</span>' : '') +
+          (isImage ? '<span class="text-green-600 font-medium">Attached</span>' : '') +
+          '<button type="button" class="text-slate-400 hover:text-red-500 ctx-remove-file"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>';
+        contextFileList.appendChild(item);
+        if (isPdf) {
+          var formData = new FormData();
+          formData.append('file', file);
+          fetch('/api/extract_pdf', { method: 'POST', body: formData })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+              var s = item.querySelector('.ctx-status');
+              if (data.ok && data.text) {
+                window._contextFileText += '\n\n--- From ' + (file.name || 'PDF') + ' ---\n' + data.text;
+                if (s) { s.textContent = 'Extracted'; s.className = 'ctx-status text-green-600 font-medium'; }
+              } else {
+                if (s) { s.textContent = 'Failed'; s.className = 'ctx-status text-red-500 font-medium'; }
+              }
+            }).catch(function() {
+              var s = item.querySelector('.ctx-status');
+              if (s) { s.textContent = 'Error'; s.className = 'ctx-status text-red-500 font-medium'; }
+            });
+        }
+      });
+    }
+    if (contextFileList) contextFileList.addEventListener('click', function(e) {
+      var btn = e.target.closest('.ctx-remove-file');
+      if (!btn) return;
+      btn.parentElement.remove();
+      if (!this.children.length) this.classList.add('hidden');
+    });
+
     fetchOutputs();
     fetchResultViews();
   </script>

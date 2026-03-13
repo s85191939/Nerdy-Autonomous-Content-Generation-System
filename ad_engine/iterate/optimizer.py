@@ -115,15 +115,16 @@ class IterationEngine:
                 "history": [{"iteration": 1, "ad": ad or FALLBACK_AD, "evaluation": fallback_eval}],
             }
 
-    def run_one_improvement(self, ad: dict, brief: dict, min_score: float = 0.0) -> dict:
+    def run_one_improvement(self, ad: dict, brief: dict, min_score: float = 0.0, user_context: str = None) -> dict:
         """Run exactly one improve step on an existing ad (for UI 'Make it better' button).
         Quality ratchet: if the new version scores worse than BOTH the fresh re-eval
         AND the stored min_score floor, keeps the original with the floor score.
-        min_score: the stored historical score that must never be undercut."""
+        min_score: the stored historical score that must never be undercut.
+        user_context: optional user instructions for how to improve the ad."""
         evaluation = self.evaluator.evaluate(ad, brief=brief)
         weak = _weakest_dimension(evaluation["scores"])
         rationale = evaluation["dimensions"][weak].get("rationale", "") or get_improvement_hint(weak, brief=brief)
-        new_ad = self.generator.improve(dict(ad), weak, rationale, brief=brief)
+        new_ad = self.generator.improve(dict(ad), weak, rationale, brief=brief, user_context=user_context)
         new_eval = self.evaluator.evaluate(new_ad, brief=brief)
 
         # Pick the best of: new_eval, fresh re-eval, and the stored min_score floor

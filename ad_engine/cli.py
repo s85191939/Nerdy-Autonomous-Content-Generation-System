@@ -540,7 +540,7 @@ def iterate_campaign(output_dir: str, run_id: str, max_extra_iterations: int = 3
     return {"run_id": new_run_id, "iterated_from": run_id, "num_ads": num_ads, "accepted": accepted_count, "avg_score": round(avg_score, 2), "output_dir": str(out_dir), "total_tokens": token_tracker.total_tokens, "estimated_cost_usd": cost_usd, "roi_accepted_per_1k_tokens": run_record["roi_accepted_per_1k_tokens"], "roi_score_per_dollar": run_record["roi_score_per_dollar"]}
 
 
-def improve_single_ad(ad_id: str, output_dir: str, quality_threshold: float = None):
+def improve_single_ad(ad_id: str, output_dir: str, quality_threshold: float = None, user_context: str = None):
     """Run one improvement step on a single ad from output/ads_dataset.json. Returns updated ad record or None."""
     out_dir = Path(output_dir)
     path = out_dir / "ads_dataset.json"
@@ -569,7 +569,7 @@ def improve_single_ad(ad_id: str, output_dir: str, quality_threshold: float = No
     prev_overall = ad_record.get("overall_score") or 0
 
     # Pass the stored score as floor so run_one_improvement never returns below it
-    result = engine.run_one_improvement(ad_copy, brief, min_score=prev_overall)
+    result = engine.run_one_improvement(ad_copy, brief, min_score=prev_overall, user_context=user_context)
     prev_scores = result["history"][0]["evaluation"].get("scores", {})
     weak = min(prev_scores, key=lambda d: prev_scores.get(d, 10)) if prev_scores else None
     new_overall = result.get("best_score") or result["evaluation"].get("overall_score") or 0

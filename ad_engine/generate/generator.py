@@ -106,12 +106,15 @@ class AdGenerator:
                 snippet = REFERENCE_PATTERNS_SNIPPET.format(hooks=", ".join(hooks[:5]) or "N/A", ctas=", ".join(ctas[:5]) or "N/A", tone_angles=", ".join(angles[:4]) or "N/A")
                 system = system + snippet
         creative_angle_suffix = ("\nCreative approach for this variant: " + creative_angle) if creative_angle else ""
+        additional_context = brief.get("additional_context", "")
+        additional_context_suffix = ("\n\nAdditional context from the user:\n" + additional_context) if additional_context else ""
         user = AD_GENERATION_USER.format(
             audience=brief.get("audience", "Parents of high school students"),
             product=brief.get("product", "SAT tutoring program"),
             goal=brief.get("goal", "conversion"),
             tone=brief.get("tone", "reassuring, results-focused"),
             creative_angle_suffix=creative_angle_suffix,
+            additional_context_suffix=additional_context_suffix,
         )
 
         def _call():
@@ -213,10 +216,11 @@ Return ONLY the JSON array, no other text."""
         weak_dimension: str,
         rationale: str,
         brief: dict = None,
+        user_context: str = None,
     ) -> dict:
         """Regenerate ad with targeted improvement for weak_dimension."""
         try:
-            return self._improve_impl(ad, weak_dimension, rationale, brief=brief)
+            return self._improve_impl(ad, weak_dimension, rationale, brief=brief, user_context=user_context)
         except Exception as e:
             logger.warning("Ad improvement failed, returning original ad: %s", e)
             return dict(ad) if ad else dict(FALLBACK_AD)
@@ -227,13 +231,18 @@ Return ONLY the JSON array, no other text."""
         weak_dimension: str,
         rationale: str,
         brief: dict = None,
+        user_context: str = None,
     ) -> dict:
         """Internal improve; may raise."""
         system = build_ad_generation_system(brief)
+        user_context_suffix = ""
+        if user_context:
+            user_context_suffix = "\nUser instructions: " + user_context
         user = IMPROVEMENT_USER.format(
             ad_json=json.dumps(ad, indent=2),
             weak_dimension=weak_dimension.replace("_", " ").title(),
             rationale=rationale,
+            user_context_suffix=user_context_suffix,
         )
 
         def _call():
