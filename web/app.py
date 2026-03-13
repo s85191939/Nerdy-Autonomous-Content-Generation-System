@@ -654,15 +654,6 @@ INDEX_HTML = """
               class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm resize-y"></textarea>
             <p class="text-xs text-slate-400 mt-1">The more context you provide, the better the ads. Paste URLs, brand docs, or reference copy.</p>
           </div>
-          <!-- PDF / file upload for context -->
-          <div class="mt-3">
-            <input type="file" id="contextFileInput" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp" style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;clip:rect(0,0,0,0);">
-            <div id="contextFileZone" class="border-2 border-dashed border-slate-300 rounded-lg p-4 text-center cursor-pointer hover:border-primary-400 hover:bg-primary-50/30 transition-colors">
-              <svg class="w-6 h-6 mx-auto text-slate-400 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
-              <p class="text-xs text-slate-500">Drop a PDF or image here for extra context, or <span class="text-primary-600 font-medium">click to upload</span></p>
-            </div>
-            <div id="contextFileList" class="mt-2 space-y-1 hidden"></div>
-          </div>
         </div>
         <!-- v2: Image generation toggle (hidden — v1 focus) -->
         <div class="hidden">
@@ -1410,7 +1401,7 @@ INDEX_HTML = """
       const quality_threshold = qualityThresholdEl && qualityThresholdEl.value ? parseFloat(qualityThresholdEl.value) : undefined;
       const enable_image_gen = !!(document.getElementById('enable_image_gen') && document.getElementById('enable_image_gen').checked);
       const additional_context_el = document.getElementById('additional_context');
-      const additional_context = (additional_context_el ? additional_context_el.value.trim() : '') + (window._contextFileText || '');
+      const additional_context = additional_context_el ? additional_context_el.value.trim() : '';
       if (!brand_name || !audience || !product || !goal) { alert('Please fill in all required fields: Brand name, Audience, Product, and Goal.'); return; }
       runBtn.disabled = true;
       runLabel.textContent = 'Running…';
@@ -1699,62 +1690,6 @@ INDEX_HTML = """
       }).join('');
       card.classList.remove('hidden');
     }
-    // --- Context file upload on initial form ---
-    window._contextFileText = '';
-    var contextFileZone = document.getElementById('contextFileZone');
-    var contextFileInput = document.getElementById('contextFileInput');
-    var contextFileList = document.getElementById('contextFileList');
-    if (contextFileZone && contextFileInput) {
-      contextFileZone.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); contextFileInput.click(); });
-      contextFileZone.addEventListener('dragover', function(e) { e.preventDefault(); e.stopPropagation(); this.classList.add('border-primary-400', 'bg-primary-50/30'); });
-      contextFileZone.addEventListener('dragleave', function(e) { e.preventDefault(); e.stopPropagation(); this.classList.remove('border-primary-400', 'bg-primary-50/30'); });
-      contextFileZone.addEventListener('drop', function(e) {
-        e.preventDefault(); e.stopPropagation();
-        this.classList.remove('border-primary-400', 'bg-primary-50/30');
-        if (e.dataTransfer.files.length) handleContextFiles(e.dataTransfer.files);
-      });
-      contextFileInput.addEventListener('change', function() { if (this.files.length) handleContextFiles(this.files); this.value = ''; });
-    }
-    function handleContextFiles(filesList) {
-      contextFileList.classList.remove('hidden');
-      Array.from(filesList).forEach(function(file) {
-        var isPdf = file.name && file.name.toLowerCase().endsWith('.pdf');
-        var isImage = file.type && file.type.startsWith('image/');
-        var item = document.createElement('div');
-        item.className = 'flex items-center gap-2 bg-slate-50 rounded-lg px-3 py-2 border border-slate-200 text-xs';
-        item.innerHTML =
-          '<span class="font-medium text-slate-700 truncate flex-1">' + esc(file.name || 'pasted-image.png') + ' <span class="text-slate-400">(' + Math.round(file.size / 1024) + ' KB)</span></span>' +
-          (isPdf ? '<span class="ctx-status text-blue-600 font-medium">Extracting...</span>' : '') +
-          (isImage ? '<span class="text-green-600 font-medium">Attached</span>' : '') +
-          '<button type="button" class="text-slate-400 hover:text-red-500 ctx-remove-file"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>';
-        contextFileList.appendChild(item);
-        if (isPdf) {
-          var formData = new FormData();
-          formData.append('file', file);
-          fetch('/api/extract_pdf', { method: 'POST', body: formData })
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-              var s = item.querySelector('.ctx-status');
-              if (data.ok && data.text) {
-                window._contextFileText += '\n\n--- From ' + (file.name || 'PDF') + ' ---\n' + data.text;
-                if (s) { s.textContent = 'Extracted'; s.className = 'ctx-status text-green-600 font-medium'; }
-              } else {
-                if (s) { s.textContent = 'Failed'; s.className = 'ctx-status text-red-500 font-medium'; }
-              }
-            }).catch(function() {
-              var s = item.querySelector('.ctx-status');
-              if (s) { s.textContent = 'Error'; s.className = 'ctx-status text-red-500 font-medium'; }
-            });
-        }
-      });
-    }
-    if (contextFileList) contextFileList.addEventListener('click', function(e) {
-      var btn = e.target.closest('.ctx-remove-file');
-      if (!btn) return;
-      btn.parentElement.remove();
-      if (!this.children.length) this.classList.add('hidden');
-    });
-
     fetchOutputs();
     fetchResultViews();
   </script>
