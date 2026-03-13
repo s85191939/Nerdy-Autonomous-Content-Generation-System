@@ -740,19 +740,28 @@ INDEX_HTML = """
       </form>
     </section>
 
-    <section class="bg-white rounded-2xl shadow-sm border border-slate-200/80 overflow-hidden mb-6">
-      <details><summary class="px-6 py-4 cursor-pointer font-medium text-slate-800 border-b border-slate-100">Competitor ad study</summary>
-      <div class="p-6 text-sm">
-        <p class="text-slate-600 mb-3">Paste competitor ads (JSON array). Extract patterns; next run uses them.</p>
-        <textarea id="competitor_ads_json" rows="3" class="w-full rounded-lg border font-mono text-xs" placeholder='[{"primary_text":"...","headline":"...","cta":"..."}]'></textarea>
-        <button type="button" id="extractPatternsBtn" class="mt-2 px-3 py-1.5 bg-primary-600 text-white rounded-lg text-sm">Extract patterns</button>
-        <p id="extractResult" class="mt-2 text-slate-500 text-xs hidden"></p>
-        <div class="mt-4 pt-4 border-t"><label class="block font-medium mb-1">Rewrite one ad</label>
-        <textarea id="rewrite_ad_json" rows="2" class="w-full rounded-lg border font-mono text-xs" placeholder='{"primary_text":"...","headline":"...","cta":"..."}'></textarea>
-        <button type="button" id="rewriteBtn" class="mt-2 px-3 py-1.5 bg-slate-600 text-white rounded-lg text-sm">Rewrite as ours</button>
-        <pre id="rewriteResult" class="mt-2 p-2 bg-slate-50 rounded text-xs hidden max-h-32 overflow-auto"></pre></div>
+    <!-- Related Ads from Facebook Ad Library -->
+    <section id="adLibraryCard" class="hidden bg-white rounded-2xl shadow-sm border border-slate-200/80 overflow-hidden mb-6">
+      <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+        <div>
+          <h3 class="text-lg font-semibold text-slate-900">Related ads on Facebook</h3>
+          <p class="text-sm text-slate-500 mt-0.5">See what competitors are running right now in the Facebook Ad Library.</p>
+        </div>
+        <svg class="w-6 h-6 text-blue-500 shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
       </div>
-      </details>
+      <div class="p-6">
+        <div id="adLibraryLinks" class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4"></div>
+        <div id="adLibraryIframe" class="mt-4 hidden">
+          <div class="border border-slate-200 rounded-xl overflow-hidden bg-slate-50">
+            <div class="flex items-center justify-between px-4 py-2 bg-slate-100 border-b border-slate-200">
+              <span class="text-xs font-medium text-slate-600" id="adLibraryIframeLabel">Facebook Ad Library</span>
+              <a id="adLibraryExternalLink" href="#" target="_blank" rel="noopener" class="text-xs text-primary-600 hover:underline font-medium">Open in new tab</a>
+            </div>
+            <iframe id="adLibraryFrame" class="w-full border-0" style="height:600px" sandbox="allow-scripts allow-same-origin allow-popups"></iframe>
+          </div>
+        </div>
+        <p class="text-xs text-slate-400 mt-3">Powered by <a href="https://www.facebook.com/ads/library/" target="_blank" rel="noopener" class="text-blue-500 hover:underline">Meta Ad Library</a>. Results open in a new tab for full browsing.</p>
+      </div>
     </section>
 
     <!-- Progress (hidden by default) -->
@@ -1211,6 +1220,7 @@ INDEX_HTML = """
           }
           fetchOutputs();
           fetchResultViews();
+          showAdLibrary();
         } else if (data.status === 'error') {
           clearInterval(pollTimer);
           runBtn.disabled = false;
@@ -1653,23 +1663,42 @@ INDEX_HTML = """
         });
     });
 
-    var extractBtn = document.getElementById('extractPatternsBtn');
-    if (extractBtn) extractBtn.addEventListener('click', function() {
-      var ta = document.getElementById('competitor_ads_json');
-      var ads = []; try { ads = JSON.parse(ta.value || '[]'); } catch (e) { alert('Invalid JSON'); return; }
-      if (!Array.isArray(ads) || !ads.length) { alert('Paste a JSON array of ads'); return; }
-      fetch('/api/competitor/extract', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ads: ads }) }).then(function(r) { return r.json(); }).then(function(d) {
-        var el = document.getElementById('extractResult'); el.classList.remove('hidden'); el.textContent = d.ok ? 'Saved. Next run will use these patterns.' : (d.error || 'Failed');
-      });
-    });
-    var rewriteBtn = document.getElementById('rewriteBtn');
-    if (rewriteBtn) rewriteBtn.addEventListener('click', function() {
-      var ta = document.getElementById('rewrite_ad_json');
-      var ad = {}; try { ad = JSON.parse(ta.value || '{}'); } catch (e) { alert('Invalid JSON'); return; }
-      fetch('/api/competitor/rewrite', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ad: ad }) }).then(function(r) { return r.json(); }).then(function(d) {
-        var el = document.getElementById('rewriteResult'); el.classList.remove('hidden'); el.textContent = (d.ok && d.ad) ? JSON.stringify(d.ad, null, 2) : (d.error || 'Failed');
-      });
-    });
+    // --- Facebook Ad Library: show related ads after generation ---
+    function showAdLibrary() {
+      var card = document.getElementById('adLibraryCard');
+      var linksEl = document.getElementById('adLibraryLinks');
+      if (!card || !linksEl) return;
+      var brandEl = document.getElementById('brand_name');
+      var productEl = document.getElementById('product');
+      var audienceEl = document.getElementById('audience');
+      var brand = brandEl ? brandEl.value.trim() : '';
+      var product = productEl ? productEl.value.trim() : '';
+      var audience = audienceEl ? audienceEl.value.trim() : '';
+      if (!brand && !product) return;
+      var searches = [];
+      if (brand) searches.push({ label: brand, query: brand });
+      if (product) searches.push({ label: product, query: product });
+      if (brand && product) searches.push({ label: brand + ' ' + product, query: brand + ' ' + product });
+      // Extract keywords from audience for broader search
+      var audienceKeywords = (audience || '').replace(/[^a-zA-Z0-9 ]/g, '').split(/\s+/).filter(function(w) { return w.length > 3; }).slice(0, 3);
+      if (audienceKeywords.length && product) {
+        searches.push({ label: product + ' for ' + audienceKeywords.join(' '), query: product + ' ' + audienceKeywords.join(' ') });
+      }
+      linksEl.innerHTML = searches.map(function(s) {
+        var url = 'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=US&q=' + encodeURIComponent(s.query);
+        return '<a href="' + esc(url) + '" target="_blank" rel="noopener" class="flex items-center gap-3 p-3 rounded-xl border border-slate-200 hover:border-blue-300 hover:bg-blue-50/50 transition-colors group">' +
+          '<div class="shrink-0 w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center">' +
+            '<svg class="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>' +
+          '</div>' +
+          '<div class="min-w-0 flex-1">' +
+            '<p class="text-sm font-medium text-slate-800 group-hover:text-blue-700 truncate">' + esc(s.label) + '</p>' +
+            '<p class="text-xs text-slate-400">Active ads on Meta</p>' +
+          '</div>' +
+          '<svg class="w-4 h-4 text-slate-300 group-hover:text-blue-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>' +
+        '</a>';
+      }).join('');
+      card.classList.remove('hidden');
+    }
     // --- Context file upload on initial form ---
     window._contextFileText = '';
     var contextFileZone = document.getElementById('contextFileZone');
