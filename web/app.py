@@ -656,10 +656,10 @@ INDEX_HTML = """
           </div>
           <!-- PDF / file upload for context -->
           <div class="mt-3">
+            <input type="file" id="contextFileInput" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp" style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;clip:rect(0,0,0,0);">
             <div id="contextFileZone" class="border-2 border-dashed border-slate-300 rounded-lg p-4 text-center cursor-pointer hover:border-primary-400 hover:bg-primary-50/30 transition-colors">
               <svg class="w-6 h-6 mx-auto text-slate-400 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
               <p class="text-xs text-slate-500">Drop a PDF or image here for extra context, or <span class="text-primary-600 font-medium">click to upload</span></p>
-              <input type="file" id="contextFileInput" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp" class="hidden">
             </div>
             <div id="contextFileList" class="mt-2 space-y-1 hidden"></div>
           </div>
@@ -883,12 +883,12 @@ INDEX_HTML = """
         <!-- File drop zone -->
         <div>
           <label class="block text-sm font-semibold text-slate-800 mb-1.5">Reference material (optional)</label>
+          <input type="file" id="dreamFileInput" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp" multiple style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;clip:rect(0,0,0,0);">
           <div id="dreamDropZone" class="border-2 border-dashed border-slate-300 rounded-lg p-5 text-center cursor-pointer hover:border-primary-400 hover:bg-primary-50/30 transition-colors relative">
             <svg class="w-8 h-8 mx-auto text-slate-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
             <p class="text-sm text-slate-600 font-medium">Drop files here</p>
             <p class="text-xs text-slate-400 mt-1">PDF, images (PNG, JPG) — or <span class="text-primary-600 font-medium">click to browse</span></p>
             <p class="text-xs text-slate-400 mt-0.5">You can also paste images with Ctrl+V / Cmd+V</p>
-            <input type="file" id="dreamFileInput" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp" multiple class="hidden">
           </div>
           <!-- Uploaded files list -->
           <div id="dreamFileList" class="mt-2 space-y-2 hidden"></div>
@@ -1497,7 +1497,7 @@ INDEX_HTML = """
     // Dream panel file upload
     var dreamDropZone = document.getElementById('dreamDropZone');
     var dreamFileInput = document.getElementById('dreamFileInput');
-    dreamDropZone.addEventListener('click', function() { dreamFileInput.click(); });
+    dreamDropZone.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); dreamFileInput.click(); });
     dreamDropZone.addEventListener('dragover', function(e) { e.preventDefault(); e.stopPropagation(); this.classList.add('border-primary-400', 'bg-primary-50/30'); });
     dreamDropZone.addEventListener('dragleave', function(e) { e.preventDefault(); e.stopPropagation(); this.classList.remove('border-primary-400', 'bg-primary-50/30'); });
     dreamDropZone.addEventListener('drop', function(e) {
@@ -1676,7 +1676,7 @@ INDEX_HTML = """
     var contextFileInput = document.getElementById('contextFileInput');
     var contextFileList = document.getElementById('contextFileList');
     if (contextFileZone && contextFileInput) {
-      contextFileZone.addEventListener('click', function() { contextFileInput.click(); });
+      contextFileZone.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); contextFileInput.click(); });
       contextFileZone.addEventListener('dragover', function(e) { e.preventDefault(); e.stopPropagation(); this.classList.add('border-primary-400', 'bg-primary-50/30'); });
       contextFileZone.addEventListener('dragleave', function(e) { e.preventDefault(); e.stopPropagation(); this.classList.remove('border-primary-400', 'bg-primary-50/30'); });
       contextFileZone.addEventListener('drop', function(e) {
