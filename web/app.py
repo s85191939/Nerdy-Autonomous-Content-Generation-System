@@ -941,7 +941,7 @@ INDEX_HTML = """
       liveAdsList.innerHTML = completedAds.map(function(ad) {
         const copy = ad.ad_copy || {};
         const headline = esc(copy.headline || '—');
-        const primary = esc((copy.primary_text || '').slice(0, 140));
+        const primary = esc(copy.primary_text || '');
         const score = ad.overall_score != null ? Number(ad.overall_score) : '—';
         const accepted = ad.accepted ? '<span class="inline-flex items-center rounded-full bg-emerald-100 text-emerald-800 text-xs font-medium px-2 py-0.5">Accepted</span>' : '<span class="inline-flex items-center rounded-full bg-slate-100 text-slate-600 text-xs font-medium px-2 py-0.5">Below threshold</span>';
         return '<div class="rounded-xl border border-slate-200 bg-slate-50/50 p-3 text-left shadow-sm">' +
@@ -949,7 +949,7 @@ INDEX_HTML = """
             '<span class="font-semibold text-slate-800 text-sm">' + headline + '</span>' +
             '<span class="text-sm font-bold ' + scoreColor(score) + ' shrink-0">' + score + '</span>' +
           '</div>' +
-          '<p class="text-xs text-slate-600 mt-1 line-clamp-2">' + primary + (primary.length >= 140 ? '…' : '') + '</p>' +
+          '<p class="text-xs text-slate-600 mt-1">' + primary + '</p>' +
           '<div class="mt-2">' + accepted + '</div>' +
           '</div>';
       }).join('');
