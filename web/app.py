@@ -828,13 +828,15 @@ INDEX_HTML = """
       <pre id="summaryText" class="p-6 text-sm text-slate-700 whitespace-pre-wrap font-sans overflow-x-auto"></pre>
     </section>
 
-    <!-- Quality trend chart (visible after run) -->
+    <!-- Quality trend chart (visible after run) — dynamic, updates after each improvement -->
     <section id="chartCard" class="hidden mb-6 bg-white rounded-2xl shadow-sm border border-slate-200/80 overflow-hidden">
       <div class="px-6 py-4 border-b border-slate-100">
         <h3 class="text-lg font-semibold text-slate-900">Quality trend</h3>
-        <p class="text-sm text-slate-500 mt-0.5">Average score over run cycles — same as iteration_quality_chart.png.</p>
+        <p class="text-sm text-slate-500 mt-0.5">Average score across all ads — updates live after each improvement.</p>
       </div>
-      <div class="p-6"><img id="chartImage" src="" alt="Quality trend chart" class="max-w-full h-auto rounded-lg border border-slate-200"></div>
+      <div class="p-6">
+        <canvas id="qualityChart" width="700" height="280" style="max-width:100%;"></canvas>
+      </div>
     </section>
 
     <!-- Scores table (visible after run) -->
@@ -857,67 +859,6 @@ INDEX_HTML = """
     </section>
   </main>
 
-  <!-- Dream Panel: slide-out side panel for "Make it better" with context input -->
-  <div id="dreamPanelOverlay" class="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 hidden transition-opacity duration-200 opacity-0">
-    <div id="dreamPanel" class="absolute right-0 top-0 h-full w-full max-w-md bg-white shadow-2xl flex flex-col translate-x-full transition-transform duration-300 ease-out">
-      <!-- Panel header -->
-      <div class="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-gradient-to-r from-primary-50 to-white">
-        <div>
-          <h3 class="text-lg font-bold text-slate-900">Improve Ad</h3>
-          <p class="text-xs text-slate-500 mt-0.5" id="dreamPanelAdId"></p>
-        </div>
-        <button id="dreamPanelClose" class="p-2 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-        </button>
-      </div>
-      <!-- Panel body -->
-      <div class="flex-1 overflow-y-auto p-6 space-y-5">
-        <!-- Instructions text input -->
-        <div>
-          <label class="block text-sm font-semibold text-slate-800 mb-1.5">What should the AI focus on?</label>
-          <textarea id="dreamContext" rows="4"
-            placeholder="e.g. Make the headline punchier, use more urgency, target millennials instead, emphasize free trial..."
-            class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm resize-y"></textarea>
-          <p class="text-xs text-slate-400 mt-1">Give specific instructions for how you want this ad improved.</p>
-        </div>
-        <!-- File drop zone -->
-        <div>
-          <label class="block text-sm font-semibold text-slate-800 mb-1.5">Reference material (optional)</label>
-          <input type="file" id="dreamFileInput" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp" multiple style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;clip:rect(0,0,0,0);">
-          <div id="dreamDropZone" class="border-2 border-dashed border-slate-300 rounded-lg p-5 text-center cursor-pointer hover:border-primary-400 hover:bg-primary-50/30 transition-colors relative">
-            <svg class="w-8 h-8 mx-auto text-slate-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
-            <p class="text-sm text-slate-600 font-medium">Drop files here</p>
-            <p class="text-xs text-slate-400 mt-1">PDF, images (PNG, JPG) — or <span class="text-primary-600 font-medium">click to browse</span></p>
-            <p class="text-xs text-slate-400 mt-0.5">You can also paste images with Ctrl+V / Cmd+V</p>
-          </div>
-          <!-- Uploaded files list -->
-          <div id="dreamFileList" class="mt-2 space-y-2 hidden"></div>
-        </div>
-        <!-- PDF URL input -->
-        <div>
-          <label class="block text-sm font-semibold text-slate-800 mb-1.5">Or paste a PDF URL</label>
-          <div class="flex gap-2">
-            <input type="text" id="dreamPdfUrl" placeholder="https://example.com/brand-guide.pdf"
-              class="flex-1 rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm">
-            <button type="button" id="dreamFetchPdf" class="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-sm font-medium hover:bg-slate-200 transition-colors shrink-0">Fetch</button>
-          </div>
-        </div>
-        <!-- Extracted text preview -->
-        <div id="dreamExtractedPreview" class="hidden">
-          <label class="block text-sm font-semibold text-slate-800 mb-1.5">Extracted context</label>
-          <div id="dreamExtractedText" class="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-600 max-h-40 overflow-y-auto whitespace-pre-wrap font-mono"></div>
-        </div>
-      </div>
-      <!-- Panel footer -->
-      <div class="px-6 py-4 border-t border-slate-200 bg-white">
-        <button type="button" id="dreamSubmitBtn"
-          class="w-full inline-flex items-center justify-center gap-2 px-6 py-3 bg-primary-600 text-white font-semibold rounded-lg shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed transition-colors text-sm">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-          <span>Improve this ad</span>
-        </button>
-      </div>
-    </div>
-  </div>
 
   <footer class="border-t border-slate-200 mt-12 py-6">
     <div class="max-w-4xl mx-auto px-4 sm:px-6 text-center text-sm text-slate-500">
@@ -1339,6 +1280,87 @@ INDEX_HTML = """
       if (el) el.classList.toggle('hidden', !show);
     }
 
+    // --- Dynamic quality trend chart (canvas) — updates after each improvement ---
+    var _chartHistory = []; // [{label, avgScore}]
+    function drawQualityChart(ads) {
+      var canvas = document.getElementById('qualityChart');
+      var card = document.getElementById('chartCard');
+      if (!canvas || !card) return;
+      if (!ads || ads.length === 0) { showEl('chartCard', false); return; }
+      // Compute current average score
+      var total = 0; var count = 0;
+      ads.forEach(function(a) {
+        var s = parseFloat(a.overall_score);
+        if (!isNaN(s)) { total += s; count++; }
+      });
+      if (count === 0) { showEl('chartCard', false); return; }
+      var avg = total / count;
+      // Add to history if this is a new point (different from last)
+      if (_chartHistory.length === 0) {
+        _chartHistory.push({ label: 'Initial', avgScore: avg });
+      } else {
+        var last = _chartHistory[_chartHistory.length - 1];
+        if (Math.abs(last.avgScore - avg) > 0.005) {
+          _chartHistory.push({ label: 'Cycle ' + _chartHistory.length, avgScore: avg });
+        }
+      }
+      showEl('chartCard', true);
+      // Draw on canvas
+      var ctx = canvas.getContext('2d');
+      var W = canvas.width, H = canvas.height;
+      var pad = { top: 30, right: 30, bottom: 40, left: 55 };
+      ctx.clearRect(0, 0, W, H);
+      // Y-axis range
+      var allScores = _chartHistory.map(function(p) { return p.avgScore; });
+      var minY = Math.min(Math.min.apply(null, allScores), 7.0) - 0.3;
+      var maxY = Math.max(Math.max.apply(null, allScores), 7.0) + 0.5;
+      var chartW = W - pad.left - pad.right;
+      var chartH = H - pad.top - pad.bottom;
+      function toX(i) { return pad.left + (allScores.length > 1 ? (i / (allScores.length - 1)) * chartW : chartW / 2); }
+      function toY(v) { return pad.top + chartH - ((v - minY) / (maxY - minY)) * chartH; }
+      // Grid lines
+      ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1;
+      for (var g = Math.ceil(minY * 2) / 2; g <= maxY; g += 0.5) {
+        var gy = toY(g);
+        ctx.beginPath(); ctx.moveTo(pad.left, gy); ctx.lineTo(W - pad.right, gy); ctx.stroke();
+        ctx.fillStyle = '#94a3b8'; ctx.font = '11px system-ui'; ctx.textAlign = 'right';
+        ctx.fillText(g.toFixed(1), pad.left - 8, gy + 4);
+      }
+      // Threshold line at 7.0
+      var thY = toY(7.0);
+      ctx.setLineDash([6, 4]); ctx.strokeStyle = '#ef4444'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(pad.left, thY); ctx.lineTo(W - pad.right, thY); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#ef4444'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'left';
+      ctx.fillText('Threshold 7.0', W - pad.right - 75, thY - 6);
+      // Line + points
+      if (allScores.length > 1) {
+        ctx.strokeStyle = '#3b82f6'; ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        allScores.forEach(function(v, i) {
+          if (i === 0) ctx.moveTo(toX(i), toY(v));
+          else ctx.lineTo(toX(i), toY(v));
+        });
+        ctx.stroke();
+      }
+      // Points + labels
+      allScores.forEach(function(v, i) {
+        ctx.beginPath(); ctx.arc(toX(i), toY(v), 5, 0, Math.PI * 2);
+        ctx.fillStyle = '#3b82f6'; ctx.fill();
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+        ctx.fillStyle = '#1e40af'; ctx.font = 'bold 11px system-ui'; ctx.textAlign = 'center';
+        ctx.fillText(v.toFixed(2), toX(i), toY(v) - 12);
+      });
+      // X-axis labels
+      ctx.fillStyle = '#64748b'; ctx.font = '11px system-ui'; ctx.textAlign = 'center';
+      _chartHistory.forEach(function(p, i) {
+        ctx.fillText(p.label, toX(i), H - pad.bottom + 20);
+      });
+      // Title
+      ctx.fillStyle = '#334155'; ctx.font = 'bold 13px system-ui'; ctx.textAlign = 'center';
+      ctx.fillText('Average quality score over iterations', W / 2, 18);
+    }
+
     function fetchResultViews() {
       fetch('/api/result/ads_dataset').then(r => r.json()).then(function(ads) {
         if (ads && ads.length > 0) {
@@ -1358,13 +1380,7 @@ INDEX_HTML = """
           showEl('summaryCard', !!text);
         }
       }).catch(function() {});
-      const chartImage = document.getElementById('chartImage');
-      const chartCard = document.getElementById('chartCard');
-      if (chartImage && chartCard) {
-        chartImage.onerror = function() { showEl('chartCard', false); };
-        chartImage.onload = function() { showEl('chartCard', true); };
-        chartImage.src = '/api/result/chart?t=' + Date.now();
-      }
+      drawQualityChart(allCompletedAds);
       fetch('/api/result/evaluation_report').then(r => r.json()).then(function(rows) {
         const table = document.getElementById('scoresTable');
         const card = document.getElementById('scoresTableCard');
@@ -1442,7 +1458,17 @@ INDEX_HTML = """
       renderGeneratedAdsPage(allCompletedAds, currentPage, PAGE_SIZE);
     });
 
-    // Open dream panel when "Make it better" is clicked
+    // Inline improve popover — shows a small dropdown below the "Make it better" button
+    var _activePopover = null;
+    function closeImprovePopover() {
+      if (_activePopover) { _activePopover.remove(); _activePopover = null; }
+      document.removeEventListener('click', _popoverOutsideClick, true);
+    }
+    function _popoverOutsideClick(e) {
+      if (_activePopover && !_activePopover.contains(e.target) && !e.target.closest('.improve-ad-btn')) {
+        closeImprovePopover();
+      }
+    }
     if (generatedAdsList) generatedAdsList.addEventListener('click', function(e) {
       var btn = e.target && e.target.closest && e.target.closest('.improve-ad-btn');
       if (!btn) return;
@@ -1450,158 +1476,28 @@ INDEX_HTML = """
       e.stopPropagation();
       var adId = btn.getAttribute('data-ad-id');
       if (!adId) return;
-      openDreamPanel(adId);
-    });
-
-    // Dream panel logic
-    var _dreamAdId = null;
-    var _dreamExtractedText = '';
-    var _dreamFiles = [];
-    function openDreamPanel(adId) {
-      _dreamAdId = adId;
-      _dreamExtractedText = '';
-      _dreamFiles = [];
-      var overlay = document.getElementById('dreamPanelOverlay');
-      var panel = document.getElementById('dreamPanel');
-      var adIdLabel = document.getElementById('dreamPanelAdId');
-      var ctx = document.getElementById('dreamContext');
-      var fileList = document.getElementById('dreamFileList');
-      var extractedPreview = document.getElementById('dreamExtractedPreview');
-      var pdfUrlInput = document.getElementById('dreamPdfUrl');
-      if (adIdLabel) adIdLabel.textContent = adId;
-      if (ctx) ctx.value = '';
-      if (fileList) { fileList.innerHTML = ''; fileList.classList.add('hidden'); }
-      if (extractedPreview) extractedPreview.classList.add('hidden');
-      if (pdfUrlInput) pdfUrlInput.value = '';
-      overlay.classList.remove('hidden');
-      requestAnimationFrame(function() {
-        overlay.classList.add('opacity-100');
-        overlay.classList.remove('opacity-0');
-        panel.classList.remove('translate-x-full');
-      });
-      document.body.style.overflow = 'hidden';
-    }
-    function closeDreamPanel() {
-      var overlay = document.getElementById('dreamPanelOverlay');
-      var panel = document.getElementById('dreamPanel');
-      panel.classList.add('translate-x-full');
-      overlay.classList.remove('opacity-100');
-      overlay.classList.add('opacity-0');
-      setTimeout(function() { overlay.classList.add('hidden'); document.body.style.overflow = ''; }, 300);
-      _dreamAdId = null;
-    }
-    document.getElementById('dreamPanelClose').addEventListener('click', closeDreamPanel);
-    document.getElementById('dreamPanelOverlay').addEventListener('click', function(e) {
-      if (e.target === this) closeDreamPanel();
-    });
-
-    // Dream panel file upload
-    var dreamDropZone = document.getElementById('dreamDropZone');
-    var dreamFileInput = document.getElementById('dreamFileInput');
-    dreamDropZone.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); dreamFileInput.click(); });
-    dreamDropZone.addEventListener('dragover', function(e) { e.preventDefault(); e.stopPropagation(); this.classList.add('border-primary-400', 'bg-primary-50/30'); });
-    dreamDropZone.addEventListener('dragleave', function(e) { e.preventDefault(); e.stopPropagation(); this.classList.remove('border-primary-400', 'bg-primary-50/30'); });
-    dreamDropZone.addEventListener('drop', function(e) {
-      e.preventDefault(); e.stopPropagation();
-      this.classList.remove('border-primary-400', 'bg-primary-50/30');
-      if (e.dataTransfer.files.length) handleDreamFiles(e.dataTransfer.files);
-    });
-    dreamFileInput.addEventListener('change', function() { if (this.files.length) handleDreamFiles(this.files); this.value = ''; });
-
-    // Paste image support in dream panel
-    document.getElementById('dreamPanel').addEventListener('paste', function(e) {
-      var items = e.clipboardData && e.clipboardData.items;
-      if (!items) return;
-      for (var i = 0; i < items.length; i++) {
-        if (items[i].type.indexOf('image') !== -1) {
-          var blob = items[i].getAsFile();
-          if (blob) handleDreamFiles([blob]);
-          break;
-        }
-      }
-    });
-
-    function handleDreamFiles(filesList) {
-      var fileListEl = document.getElementById('dreamFileList');
-      fileListEl.classList.remove('hidden');
-      Array.from(filesList).forEach(function(file) {
-        _dreamFiles.push(file);
-        var idx = _dreamFiles.length - 1;
-        var item = document.createElement('div');
-        item.className = 'flex items-center gap-2 bg-slate-50 rounded-lg px-3 py-2 border border-slate-200';
-        var isPdf = file.name && file.name.toLowerCase().endsWith('.pdf');
-        var isImage = file.type && file.type.startsWith('image/');
-        item.innerHTML =
-          '<span class="text-xs font-medium text-slate-700 truncate flex-1">' + esc(file.name || 'pasted-image.png') + ' <span class="text-slate-400">(' + Math.round(file.size / 1024) + ' KB)</span></span>' +
-          (isPdf ? '<span class="text-xs text-blue-600 font-medium dream-extract-status" data-idx="' + idx + '">Extracting...</span>' : '') +
-          (isImage ? '<span class="text-xs text-green-600 font-medium">Image attached</span>' : '') +
-          '<button type="button" class="text-slate-400 hover:text-red-500 dream-remove-file" data-idx="' + idx + '"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>';
-        fileListEl.appendChild(item);
-        // Extract PDF text
-        if (isPdf) {
-          var formData = new FormData();
-          formData.append('file', file);
-          fetch('/api/extract_pdf', { method: 'POST', body: formData })
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-              var statusEl = item.querySelector('.dream-extract-status');
-              if (data.ok && data.text) {
-                _dreamExtractedText += '\\n\\n--- From ' + (file.name || 'PDF') + ' ---\\n' + data.text;
-                if (statusEl) { statusEl.textContent = 'Extracted'; statusEl.className = 'text-xs text-green-600 font-medium'; }
-                showDreamExtracted();
-              } else {
-                if (statusEl) { statusEl.textContent = 'Failed'; statusEl.className = 'text-xs text-red-500 font-medium'; }
-              }
-            }).catch(function() {
-              var statusEl = item.querySelector('.dream-extract-status');
-              if (statusEl) { statusEl.textContent = 'Error'; statusEl.className = 'text-xs text-red-500 font-medium'; }
-            });
-        }
-      });
-    }
-    function showDreamExtracted() {
-      var preview = document.getElementById('dreamExtractedPreview');
-      var textEl = document.getElementById('dreamExtractedText');
-      if (_dreamExtractedText.trim()) {
-        preview.classList.remove('hidden');
-        textEl.textContent = _dreamExtractedText.trim().slice(0, 3000) + (_dreamExtractedText.length > 3000 ? '\\n...(truncated)' : '');
-      }
-    }
-    // Remove file handler
-    document.getElementById('dreamFileList').addEventListener('click', function(e) {
-      var btn = e.target.closest('.dream-remove-file');
-      if (!btn) return;
-      btn.parentElement.remove();
-      if (!this.children.length) this.classList.add('hidden');
-    });
-    // Fetch PDF from URL
-    document.getElementById('dreamFetchPdf').addEventListener('click', function() {
-      var urlInput = document.getElementById('dreamPdfUrl');
-      var url = urlInput.value.trim();
-      if (!url) { alert('Enter a PDF URL'); return; }
-      this.textContent = 'Fetching...';
-      this.disabled = true;
-      var self = this;
-      fetch('/api/fetch_pdf_url', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: url }) })
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-          self.textContent = 'Fetch'; self.disabled = false;
-          if (data.ok && data.text) {
-            _dreamExtractedText += '\\n\\n--- From URL ---\\n' + data.text;
-            showDreamExtracted();
-          } else {
-            alert(data.error || 'Failed to fetch PDF');
-          }
-        }).catch(function() { self.textContent = 'Fetch'; self.disabled = false; alert('Request failed'); });
-    });
-
-    // Dream panel submit — triggers the improve API with user context
-    document.getElementById('dreamSubmitBtn').addEventListener('click', function() {
-      if (!_dreamAdId) return;
-      var adId = _dreamAdId;
-      var userContext = (document.getElementById('dreamContext').value || '').trim();
-      if (_dreamExtractedText.trim()) userContext += '\\n\\nReference material:\\n' + _dreamExtractedText.trim();
-      closeDreamPanel();
+      // If popover already open for this ad, close it
+      if (_activePopover && _activePopover.dataset.adId === adId) { closeImprovePopover(); return; }
+      closeImprovePopover();
+      // Create inline popover
+      var pop = document.createElement('div');
+      pop.dataset.adId = adId;
+      pop.className = 'absolute z-40 mt-2 right-0 w-80 bg-white rounded-xl shadow-xl border border-slate-200 p-4';
+      pop.innerHTML =
+        '<label class="block text-xs font-semibold text-slate-700 mb-1">Additional context <span class="font-normal text-slate-400">(optional)</span></label>' +
+        '<textarea class="improve-popover-text block w-full rounded-lg border-slate-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 text-sm resize-none" rows="2" placeholder="e.g. punchier headline, more urgency..."></textarea>' +
+        '<button type="button" class="improve-popover-go mt-2 w-full inline-flex items-center justify-center gap-2 px-4 py-2 bg-primary-600 text-white font-semibold rounded-lg shadow-sm hover:bg-primary-700 text-xs transition-colors">' +
+          '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>' +
+          'Improve this ad</button>';
+      // Position relative to button
+      var wrapper = btn.parentElement;
+      if (wrapper) { wrapper.style.position = 'relative'; wrapper.appendChild(pop); }
+      _activePopover = pop;
+      setTimeout(function() { document.addEventListener('click', _popoverOutsideClick, true); }, 0);
+      // Handle submit
+      pop.querySelector('.improve-popover-go').addEventListener('click', function() {
+        var userContext = (pop.querySelector('.improve-popover-text').value || '').trim();
+        closeImprovePopover();
       // Now show the loading skeleton and fire the improve request
       var currentAd = allCompletedAds.find(function(a) { return (a.id || a.ad_id) === adId; });
       var currentCycle = (currentAd && currentAd.iteration_count) ? currentAd.iteration_count : 1;
@@ -1643,6 +1539,7 @@ INDEX_HTML = """
             var idx = allCompletedAds.findIndex(function(a) { return (a.id || a.ad_id) === adId; });
             if (idx >= 0) { allCompletedAds[idx] = data.ad; }
             renderGeneratedAdsPage(allCompletedAds, currentPage, PAGE_SIZE);
+            drawQualityChart(allCompletedAds);
           } else {
             alert(data.error || 'Improve failed');
             renderGeneratedAdsPage(allCompletedAds, currentPage, PAGE_SIZE);
@@ -1652,7 +1549,8 @@ INDEX_HTML = """
           alert('Request failed — check server logs');
           renderGeneratedAdsPage(allCompletedAds, currentPage, PAGE_SIZE);
         });
-    });
+      }); // end popover go click
+    }); // end generatedAdsList click
 
     // --- Facebook Ad Library: show related ads after generation ---
     function showAdLibrary() {
@@ -1666,14 +1564,21 @@ INDEX_HTML = """
       var product = productEl ? productEl.value.trim() : '';
       var audience = audienceEl ? audienceEl.value.trim() : '';
       if (!brand && !product) return;
+      // Extract the core product category (last meaningful word)
+      var productWords = (product || '').replace(/[^a-zA-Z0-9 ]/g, '').split(/\s+/).filter(function(w) { return w.length > 2; });
+      var coreProduct = productWords.length > 0 ? productWords[productWords.length - 1] : '';
       var searches = [];
-      if (brand) searches.push({ label: brand, query: brand });
-      if (product) searches.push({ label: product, query: product });
-      if (brand && product) searches.push({ label: brand + ' ' + product, query: brand + ' ' + product });
-      // Extract keywords from audience for broader search
-      var audienceKeywords = (audience || '').replace(/[^a-zA-Z0-9 ]/g, '').split(/\s+/).filter(function(w) { return w.length > 3; }).slice(0, 3);
-      if (audienceKeywords.length && product) {
-        searches.push({ label: product + ' for ' + audienceKeywords.join(' '), query: product + ' ' + audienceKeywords.join(' ') });
+      // 1. Brand name — searches by advertiser/page name (most reliable)
+      if (brand) searches.push({ label: brand, query: brand, desc: 'Ads by this brand' });
+      // 2. Core product category — broader search that actually returns results
+      if (coreProduct && coreProduct.toLowerCase() !== brand.toLowerCase()) {
+        searches.push({ label: coreProduct, query: coreProduct, desc: 'Ads in this category' });
+      }
+      // 3. Brand + core product — targeted cross-reference
+      if (brand && coreProduct) searches.push({ label: brand + ' ' + coreProduct, query: brand + ' ' + coreProduct, desc: 'Brand + category' });
+      // 4. Full product if different from core — user's exact terms
+      if (product && product.toLowerCase() !== coreProduct.toLowerCase() && product.toLowerCase() !== brand.toLowerCase()) {
+        searches.push({ label: product, query: product, desc: 'Exact product match' });
       }
       linksEl.innerHTML = searches.map(function(s) {
         var url = 'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=US&q=' + encodeURIComponent(s.query);
@@ -1683,7 +1588,7 @@ INDEX_HTML = """
           '</div>' +
           '<div class="min-w-0 flex-1">' +
             '<p class="text-sm font-medium text-slate-800 group-hover:text-blue-700 truncate">' + esc(s.label) + '</p>' +
-            '<p class="text-xs text-slate-400">Active ads on Meta</p>' +
+            '<p class="text-xs text-slate-400">' + esc(s.desc || 'Active ads on Meta') + '</p>' +
           '</div>' +
           '<svg class="w-4 h-4 text-slate-300 group-hover:text-blue-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>' +
         '</a>';
