@@ -109,6 +109,11 @@ class AdGenerator:
             if hooks or ctas or angles:
                 snippet = REFERENCE_PATTERNS_SNIPPET.format(hooks=", ".join(hooks[:5]) or "N/A", ctas=", ".join(ctas[:5]) or "N/A", tone_angles=", ".join(angles[:4]) or "N/A")
                 system = system + snippet
+        # Inject cross-run learned insights (prompt learning)
+        learned = getattr(self, "_learned_insights", None)
+        if learned and isinstance(learned, dict) and learned.get("golden_rules"):
+            from ad_engine.learning.insights import format_learned_snippet
+            system = system + format_learned_snippet(learned)
         creative_angle_suffix = ("\nCreative approach for this variant: " + creative_angle) if creative_angle else ""
         additional_context = brief.get("additional_context", "")
         additional_context_suffix = ("\n\nIMPORTANT — The user gave these specific creative directions (you MUST follow them):\n" + additional_context) if additional_context else ""
@@ -178,6 +183,11 @@ class AdGenerator:
                     tone_angles=", ".join(angles[:4]) or "N/A",
                 )
                 system = system + snippet
+        # Inject cross-run learned insights (prompt learning)
+        learned = getattr(self, "_learned_insights", None)
+        if learned and isinstance(learned, dict) and learned.get("golden_rules"):
+            from ad_engine.learning.insights import format_learned_snippet
+            system = system + format_learned_snippet(learned)
 
         additional_context = brief.get("additional_context", "")
         additional_context_block = ("\n\nIMPORTANT — The user gave these specific creative directions (you MUST follow them for EVERY ad):\n" + additional_context) if additional_context else ""

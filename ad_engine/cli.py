@@ -119,6 +119,12 @@ def _run_pipeline_body(num_ads, max_iterations, out_dir, seed, progress_callback
         generator._reference_insights = load_insights(out_dir / "competitor_insights.json")
     except Exception:
         generator._reference_insights = None
+    # Load cross-run learned insights (prompt learning)
+    try:
+        from ad_engine.learning.insights import load_learned_insights
+        generator._learned_insights = load_learned_insights(out_dir / "learned_insights.json")
+    except Exception:
+        generator._learned_insights = None
     engine = IterationEngine(
         generator=generator,
         evaluator=evaluator,
@@ -446,6 +452,31 @@ def _run_pipeline_body(num_ads, max_iterations, out_dir, seed, progress_callback
     except Exception as hist_err:
         logger.warning("Could not append run history: %s", hist_err)
 
+    # ── PROMPT LEARNING: analyze top ads from all past runs ──
+    learned_insights_active = bool(
+        getattr(generator, "_learned_insights", None)
+        and (getattr(generator, "_learned_insights", {}) or {}).get("golden_rules")
+    )
+    try:
+        from ad_engine.learning.insights import gather_top_ads, analyze_learnings, save_learned_insights
+        top_ads = gather_top_ads(out_dir)
+        if len(top_ads) >= 1:
+            learned = analyze_learnings(top_ads, token_tracker=token_tracker)
+            runs_dir_count = 0
+            try:
+                rd = out_dir / "runs"
+                if rd.exists():
+                    runs_dir_count = len([d for d in rd.iterdir() if d.is_dir()])
+            except Exception:
+                pass
+            learned["runs_analyzed"] = runs_dir_count
+            learned["ads_analyzed"] = len(top_ads)
+            learned["updated_at"] = datetime.utcnow().isoformat() + "Z"
+            save_learned_insights(learned, out_dir / "learned_insights.json")
+            logger.info("Prompt learning: analyzed %d top ads from %d runs", len(top_ads), runs_dir_count)
+    except Exception as learn_err:
+        logger.warning("Learning analysis failed (non-fatal): %s", learn_err)
+
     result = _minimal_result(
         accepted=accepted_count,
         avg_score=avg_score,
@@ -458,6 +489,7 @@ def _run_pipeline_body(num_ads, max_iterations, out_dir, seed, progress_callback
     result["run_id"] = run_id
     result["run_timestamp"] = run_record["timestamp"]
     result["quality_threshold"] = quality_threshold
+    result["learned_insights_active"] = learned_insights_active
     return result
 
 

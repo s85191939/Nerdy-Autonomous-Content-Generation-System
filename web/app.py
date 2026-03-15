@@ -307,6 +307,57 @@ def api_improve_ad():
     return jsonify({"ok": True, "ad": updated})
 
 
+@app.route("/api/vote_ad", methods=["POST"])
+def api_vote_ad():
+    """Toggle a single vote on an ad. Body: { ad_id, vote: 'up'|'down' }.
+
+    Each ad supports exactly one vote at a time (up, down, or none).
+    - Voting the same direction again removes the vote (toggle off).
+    - Voting the opposite direction switches the vote.
+    Votes do NOT change the ad score — they influence Engine Intelligence
+    (learning skips downvoted ads, prioritises upvoted ones).
+    """
+    import json
+    data = request.get_json(force=True, silent=True) or {}
+    ad_id = (data.get("ad_id") or "").strip()
+    vote = (data.get("vote") or "").strip()
+    if not ad_id or ".." in ad_id or "/" in ad_id:
+        return jsonify({"ok": False, "error": "Invalid ad_id"}), 400
+    if vote not in ("up", "down"):
+        return jsonify({"ok": False, "error": "vote must be 'up' or 'down'"}), 400
+    path = ROOT / "output" / "ads_dataset.json"
+    if not path.exists():
+        return jsonify({"ok": False, "error": "No ads dataset found"}), 404
+    try:
+        with open(path) as f:
+            ads = json.load(f)
+        if not isinstance(ads, list):
+            return jsonify({"ok": False, "error": "Invalid dataset"}), 500
+        idx = next((i for i, a in enumerate(ads) if a.get("id") == ad_id), None)
+        if idx is None:
+            return jsonify({"ok": False, "error": "Ad not found"}), 404
+        ad = ads[idx]
+        prev_vote = ad.get("user_vote")  # None, "up", or "down"
+
+        # Toggle logic (no score change)
+        if prev_vote == vote:
+            ad["user_vote"] = None          # same again → undo
+        else:
+            ad["user_vote"] = vote          # new or switch direction
+
+        ads[idx] = ad
+        with open(path, "w") as f:
+            json.dump(ads, f, indent=2)
+        return jsonify({
+            "ok": True,
+            "ad_id": ad_id,
+            "user_vote": ad["user_vote"],
+            "score": ad.get("overall_score", 0),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/extract_pdf", methods=["POST"])
 def api_extract_pdf():
     """Extract text from an uploaded PDF file. Returns { ok, text }."""
@@ -524,6 +575,56 @@ def api_competitor_rewrite():
     return jsonify({"ok": out is not None, "ad": out} if out else {"ok": False, "error": "Rewrite failed"})
 
 
+@app.route("/api/learned_insights")
+def api_learned_insights():
+    """Return learned insights from past runs for UI display."""
+    from ad_engine.learning.insights import load_learned_insights
+    import json
+    insights = load_learned_insights(ROOT / "output" / "learned_insights.json")
+    run_count = 0
+    try:
+        hist_path = ROOT / "output" / "run_history.json"
+        if hist_path.exists():
+            with open(hist_path) as f:
+                runs = json.load(f)
+            run_count = len(runs) if isinstance(runs, list) else 0
+    except Exception:
+        pass
+    insights["total_runs"] = run_count
+    return jsonify(insights)
+
+
+@app.route("/api/learn", methods=["POST"])
+def api_learn():
+    """Trigger fresh learning analysis from all past runs. Returns the new insights."""
+    from ad_engine.learning.insights import gather_top_ads, analyze_learnings, save_learned_insights
+    from ad_engine.metrics.token_tracker import TokenTracker
+    from ad_engine.cli import _infer_backend
+    from datetime import datetime
+    try:
+        out_dir = ROOT / "output"
+        backend = _infer_backend()
+        token_tracker = TokenTracker(backend=backend)
+        top_ads = gather_top_ads(out_dir)
+        if len(top_ads) < 1:
+            return jsonify({"ok": False, "error": "No ads found. Run at least one campaign first."}), 400
+        learned = analyze_learnings(top_ads, token_tracker=token_tracker)
+        run_count = 0
+        try:
+            runs_dir = out_dir / "runs"
+            if runs_dir.exists():
+                run_count = len([d for d in runs_dir.iterdir() if d.is_dir()])
+        except Exception:
+            pass
+        learned["runs_analyzed"] = run_count
+        learned["ads_analyzed"] = len(top_ads)
+        learned["updated_at"] = datetime.utcnow().isoformat() + "Z"
+        save_learned_insights(learned, out_dir / "learned_insights.json")
+        return jsonify({"ok": True, "insights": learned})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/dashboard")
 def dashboard():
     return render_template_string(DASHBOARD_HTML)
@@ -592,7 +693,6 @@ INDEX_HTML = """
       <nav class="flex items-center gap-1">
         <a href="/" class="px-3 py-1.5 text-sm font-medium rounded-lg bg-primary-50 text-primary-700">Generator</a>
         <a href="/dashboard" class="px-3 py-1.5 text-sm font-medium rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-800 transition-colors">Campaigns</a>
-        <span class="px-3 py-1.5 text-sm font-medium rounded-lg text-slate-400 cursor-not-allowed select-none" title="Coming soon">Studio <span class="text-[10px] bg-slate-100 text-slate-400 px-1.5 py-0.5 rounded-md ml-0.5 uppercase tracking-wider">TBA</span></span>
       </nav>
     </div>
   </header>
@@ -608,6 +708,10 @@ INDEX_HTML = """
         <span class="inline-flex items-center rounded-full bg-purple-50 text-purple-700 px-2.5 py-1 font-medium">Multi-Model</span>
         <span class="inline-flex items-center rounded-full bg-amber-50 text-amber-700 px-2.5 py-1 font-medium">Quality Ratchet</span>
         <span class="inline-flex items-center rounded-full bg-rose-50 text-rose-700 px-2.5 py-1 font-medium">Competitive Intel</span>
+        <span id="learningBadge" class="hidden inline-flex items-center rounded-full bg-indigo-50 text-indigo-700 px-2.5 py-1 font-medium">
+          <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+          Prompt Learning
+        </span>
       </div>
     </section>
 
@@ -756,6 +860,57 @@ INDEX_HTML = """
       </div>
     </section>
 
+    <!-- Engine Intelligence (Prompt Learning) -->
+    <section id="learningPanel" class="hidden bg-white rounded-2xl shadow-sm border border-indigo-200/80 overflow-hidden mb-6">
+      <div class="px-6 py-4 border-b border-indigo-100 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="w-9 h-9 rounded-xl bg-indigo-100 flex items-center justify-center">
+            <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+          </div>
+          <div>
+            <h3 class="text-base font-semibold text-slate-900">Engine Intelligence</h3>
+            <p class="text-xs text-slate-500 mt-0.5">Patterns learned from <span id="learningRunCount" class="font-semibold text-indigo-600">0</span> past runs — injected into prompts automatically</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-3">
+          <div id="learningScoreIndicator" class="flex items-center gap-1" title="Learning level">
+            <span class="w-2 h-2 rounded-full bg-indigo-200" id="learnDot1"></span>
+            <span class="w-2 h-2 rounded-full bg-indigo-200" id="learnDot2"></span>
+            <span class="w-2 h-2 rounded-full bg-indigo-200" id="learnDot3"></span>
+            <span class="w-2 h-2 rounded-full bg-indigo-200" id="learnDot4"></span>
+            <span class="w-2 h-2 rounded-full bg-indigo-200" id="learnDot5"></span>
+          </div>
+          <span class="text-[10px] text-indigo-400 font-medium uppercase tracking-wider">Auto-updated each run</span>
+        </div>
+      </div>
+      <div id="learningContent" class="px-6 py-5">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+          <div>
+            <p class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">Best Hook Patterns</p>
+            <ul id="learningHooks" class="space-y-1.5 text-sm text-slate-700"></ul>
+          </div>
+          <div>
+            <p class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">Best CTAs</p>
+            <ul id="learningCtas" class="space-y-1.5 text-sm text-slate-700"></ul>
+          </div>
+          <div>
+            <p class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">Emotional Angles That Work</p>
+            <ul id="learningAngles" class="space-y-1.5 text-sm text-slate-700"></ul>
+          </div>
+          <div>
+            <p class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">Watch Out For</p>
+            <ul id="learningWeakDims" class="space-y-1.5 text-sm text-slate-700"></ul>
+          </div>
+        </div>
+        <div class="mt-5 pt-4 border-t border-indigo-100/60">
+          <p class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">Golden Rules</p>
+          <ul id="learningRules" class="space-y-1.5 text-sm text-slate-700"></ul>
+        </div>
+        <div id="learningSummary" class="mt-4 p-3 bg-indigo-50/70 rounded-lg text-sm text-indigo-800 font-medium"></div>
+        <p id="learningUpdatedAt" class="text-[10px] text-slate-400 mt-3"></p>
+      </div>
+    </section>
+
     <!-- Progress (hidden by default) -->
     <section id="progressCard" class="hidden bg-white rounded-2xl shadow-sm border border-slate-200/80 p-6 mb-6">
       <div class="flex items-center justify-between mb-3">
@@ -791,6 +946,10 @@ INDEX_HTML = """
         <svg class="w-3 h-3 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
         <span id="stage-done" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-400">
           <span class="w-1.5 h-1.5 rounded-full bg-current"></span> Done
+        </span>
+        <span id="learningActiveBadge" class="hidden inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 ml-auto">
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+          Enhanced with learnings from <span id="learningBadgeCount">0</span> runs
         </span>
       </div>
       <div id="liveAdsWrap" class="mt-6 pt-4 border-t border-slate-100">
@@ -994,13 +1153,31 @@ INDEX_HTML = """
         return '<tr><td class="pr-2">' + (h.iteration || i + 1) + '</td><td class="pr-2 font-semibold ' + scoreColor(h.overall_score) + '">' + (h.overall_score != null ? h.overall_score : '—') + '</td><td class="text-slate-500 text-xs">' + t + '</td></tr>';
       }).join('');
       const adId = esc(ad.id || ('ad_' + idx));
+      const userVote = ad.user_vote || null;
+      const votedBadge = userVote ? '<span class="inline-flex items-center rounded-full bg-indigo-100 text-indigo-700 text-xs font-medium px-2 py-0.5">Voted</span>' : '';
+      const upActive = userVote === 'up';
+      const downActive = userVote === 'down';
+      const upBtnClass = upActive
+        ? 'vote-btn vote-up inline-flex items-center gap-1 px-2 py-1 rounded-lg border-2 border-emerald-500 bg-emerald-50 text-emerald-700 text-xs font-semibold transition-colors'
+        : 'vote-btn vote-up inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-slate-200 text-slate-400 hover:border-emerald-300 hover:text-emerald-600 hover:bg-emerald-50 text-xs font-medium transition-colors';
+      const downBtnClass = downActive
+        ? 'vote-btn vote-down inline-flex items-center gap-1 px-2 py-1 rounded-lg border-2 border-red-400 bg-red-50 text-red-600 text-xs font-semibold transition-colors'
+        : 'vote-btn vote-down inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-slate-200 text-slate-400 hover:border-red-300 hover:text-red-500 hover:bg-red-50 text-xs font-medium transition-colors';
       return '<div id="ad-card-' + adId + '" class="ad-card-wrapper">' +
         '<div class="rounded-xl border border-slate-200 bg-white shadow-sm text-left">' +
           '<div class="p-4 flex items-center justify-between gap-2 flex-wrap">' +
             '<span class="text-xs font-medium text-slate-400">' + (ad.id || ('Ad ' + (idx + 1))) + '</span>' +
-            '<span class="text-sm font-bold ' + scoreColor(score) + '">Score: ' + score + '</span>' +
-            badge + cycleBadge +
+            '<span id="score-display-' + adId + '" class="text-sm font-bold ' + scoreColor(score) + '">Score: ' + score + '</span>' +
+            badge + cycleBadge + votedBadge +
             '<span class="text-slate-400 text-xs truncate max-w-[200px]">' + headline + '</span>' +
+            '<div class="flex items-center gap-1">' +
+              '<button type="button" class="' + upBtnClass + '" data-ad-id="' + adId + '" data-vote="up" title="' + (upActive ? 'Remove vote' : 'This ad is good') + '">' +
+                '<svg class="w-3.5 h-3.5" fill="' + (upActive ? 'currentColor' : 'none') + '" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 10h4.764a2 2 0 011.789 2.894l-3.5 7A2 2 0 0115.263 21h-4.017c-.163 0-.326-.02-.485-.06L7 20m7-10V5a2 2 0 00-2-2h-.095c-.5 0-.905.405-.905.905 0 .714-.211 1.412-.608 2.006L7 11v9m7-10h-2M7 20H5a2 2 0 01-2-2v-6a2 2 0 012-2h2.5"/></svg>' +
+              '</button>' +
+              '<button type="button" class="' + downBtnClass + '" data-ad-id="' + adId + '" data-vote="down" title="' + (downActive ? 'Remove vote' : 'This ad needs work') + '">' +
+                '<svg class="w-3.5 h-3.5" fill="' + (downActive ? 'currentColor' : 'none') + '" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14H5.236a2 2 0 01-1.789-2.894l3.5-7A2 2 0 018.736 3h4.018a2 2 0 01.485.06l3.76.94m-7 10v5a2 2 0 002 2h.096c.5 0 .905-.405.905-.904 0-.715.211-1.413.608-2.008L17 13V4m-7 10h2m5-10h2a2 2 0 012 2v6a2 2 0 01-2 2h-2.5"/></svg>' +
+              '</button>' +
+            '</div>' +
             '<button type="button" class="improve-ad-btn px-3 py-1.5 rounded-lg bg-primary-600 text-white text-xs font-semibold hover:bg-primary-700 shadow-sm shrink-0 transition-colors" data-ad-id="' + adId + '">Make it better</button>' +
           '</div>' +
           '<div class="px-4 pb-4 border-t border-slate-100">' +
@@ -1144,6 +1321,7 @@ INDEX_HTML = """
             (data.result.total_tokens != null ? statCard('Total tokens', data.result.total_tokens.toLocaleString()) : '') +
             (data.result.estimated_cost_usd != null ? statCard('Est. cost', '$' + data.result.estimated_cost_usd) : '') +
             (data.result.roi_accepted_per_1k_tokens != null ? statCard('ROI (accepted/1K tok)', data.result.roi_accepted_per_1k_tokens) : '') +
+            (data.result.learned_insights_active ? statCard('Prompt Learning', '<span class="text-indigo-600 font-semibold">Active</span> \u2014 learnings from past runs applied') : '') +
             statCard('Output', '<span class="text-sm font-mono text-slate-600 truncate block" title="' + data.result.output_dir + '">' + data.result.output_dir.replace(/.*[/\\\\]/, '') + '</span>');
           showResult(true);
           if (data.completed_ads && data.completed_ads.length > 0) {
@@ -1154,6 +1332,7 @@ INDEX_HTML = """
           fetchOutputs();
           fetchResultViews();
           showAdLibrary();
+          loadLearningInsights();  // Refresh learnings (may have been updated by this run)
         } else if (data.status === 'error') {
           clearInterval(pollTimer);
           runBtn.disabled = false;
@@ -1553,6 +1732,43 @@ INDEX_HTML = """
       }); // end popover go click
     }); // end generatedAdsList click
 
+    // --- Ad Voting: thumbs up / down (toggle, single vote per ad) ---
+    if (generatedAdsList) generatedAdsList.addEventListener('click', function(e) {
+      var btn = e.target && e.target.closest && e.target.closest('.vote-btn');
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      var adId = btn.getAttribute('data-ad-id');
+      var vote = btn.getAttribute('data-vote');
+      if (!adId || !vote) return;
+      btn.disabled = true;
+      btn.style.opacity = '0.5';
+      fetch('/api/vote_ad', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ad_id: adId, vote: vote })
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        if (data.ok) {
+          var idx = allCompletedAds.findIndex(function(a) { return (a.id || a.ad_id) === adId; });
+          if (idx >= 0) {
+            allCompletedAds[idx].user_vote = data.user_vote;
+          }
+          renderGeneratedAdsPage(allCompletedAds, currentPage, PAGE_SIZE);
+        } else {
+          alert(data.error || 'Vote failed');
+        }
+      })
+      .catch(function() {
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        alert('Vote request failed');
+      });
+    });
+
     // --- Facebook Ad Library: show related ads after generation ---
     function showAdLibrary() {
       var card = document.getElementById('adLibraryCard');
@@ -1598,6 +1814,74 @@ INDEX_HTML = """
     }
     fetchOutputs();
     fetchResultViews();
+
+    // ─── Prompt Learning: Engine Intelligence ───
+    var learningInsights = null;
+
+    function loadLearningInsights() {
+      fetch('/api/learned_insights').then(function(r) { return r.json(); }).then(function(data) {
+        learningInsights = data;
+        renderLearningPanel(data);
+      }).catch(function() {});
+    }
+
+    function renderLearningPanel(data) {
+      var panel = document.getElementById('learningPanel');
+      var badge = document.getElementById('learningBadge');
+      var hasLearnings = data && data.golden_rules && data.golden_rules.length > 0;
+      if (!hasLearnings) {
+        if (panel) panel.classList.add('hidden');
+        if (badge) badge.classList.add('hidden');
+        var ab = document.getElementById('learningActiveBadge');
+        if (ab) ab.classList.add('hidden');
+        return;
+      }
+      if (panel) panel.classList.remove('hidden');
+      if (badge) badge.classList.remove('hidden');
+      // Run count
+      var runs = data.runs_analyzed || data.total_runs || 0;
+      var countEl = document.getElementById('learningRunCount');
+      if (countEl) countEl.textContent = runs;
+      // Learning level dots (1 dot per ~5 runs, max 5)
+      var level = Math.min(5, Math.max(1, Math.ceil(runs / 5)));
+      for (var i = 1; i <= 5; i++) {
+        var dot = document.getElementById('learnDot' + i);
+        if (dot) dot.className = 'w-2 h-2 rounded-full ' + (i <= level ? 'bg-indigo-500' : 'bg-indigo-200');
+      }
+      // Render lists
+      function renderList(elId, items) {
+        var el = document.getElementById(elId);
+        if (!el || !items) return;
+        el.innerHTML = items.map(function(item) {
+          var text = typeof item === 'string' ? item : ((item.dim || '') + ': ' + (item.note || ''));
+          return '<li class="flex items-start gap-2"><span class="text-indigo-400 mt-0.5 text-xs">&#9679;</span><span>' + esc(text) + '</span></li>';
+        }).join('');
+      }
+      renderList('learningHooks', data.best_hooks);
+      renderList('learningCtas', data.best_ctas);
+      renderList('learningAngles', data.best_emotional_angles);
+      renderList('learningWeakDims', data.weak_dimensions);
+      renderList('learningRules', data.golden_rules);
+      var summaryEl = document.getElementById('learningSummary');
+      if (summaryEl) {
+        if (data.summary) { summaryEl.textContent = data.summary; summaryEl.classList.remove('hidden'); }
+        else summaryEl.classList.add('hidden');
+      }
+      var updatedEl = document.getElementById('learningUpdatedAt');
+      if (updatedEl && data.updated_at) {
+        try {
+          var d = new Date(data.updated_at);
+          updatedEl.textContent = 'Last analyzed: ' + d.toLocaleDateString() + ' ' + d.toLocaleTimeString();
+        } catch(e) { updatedEl.textContent = 'Last analyzed: ' + data.updated_at; }
+      }
+      // "Enhanced with learnings" badge
+      var activeBadge = document.getElementById('learningActiveBadge');
+      var badgeCount = document.getElementById('learningBadgeCount');
+      if (activeBadge) activeBadge.classList.remove('hidden');
+      if (badgeCount) badgeCount.textContent = runs;
+    }
+
+    loadLearningInsights();
   </script>
 </body>
 </html>
@@ -1628,7 +1912,6 @@ DASHBOARD_HTML = """
       <nav class="flex items-center gap-1">
         <a href="/" class="px-3 py-1.5 text-sm font-medium rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-800 transition-colors">Generator</a>
         <a href="/dashboard" class="px-3 py-1.5 text-sm font-medium rounded-lg bg-primary-50 text-primary-700">Campaigns</a>
-        <span class="px-3 py-1.5 text-sm font-medium rounded-lg text-slate-400 cursor-not-allowed select-none" title="Coming soon">Studio <span class="text-[10px] bg-slate-100 text-slate-400 px-1.5 py-0.5 rounded-md ml-0.5 uppercase tracking-wider">TBA</span></span>
       </nav>
     </div>
   </header>
@@ -1747,7 +2030,6 @@ DASHBOARD_HTML = """
               '<p class="text-slate-500 text-xs mt-0.5">' + time + (r.backend ? ' · ' + r.backend : '') + '</p>' +
             '</div>' +
             '<button type="button" class="view-ads px-3 py-1.5 text-sm font-medium text-primary-600 hover:bg-primary-50 rounded-lg" data-run-id="' + runId + '">View ads</button>' +
-            '<button type="button" class="improve-again px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg border border-slate-200" data-run-id="' + runId + '">Improve again</button>' +
           '</div>' +
           '<p class="text-slate-800 leading-relaxed">' + summaryText(r) + '</p>' +
           downloadsHtml +
@@ -1791,22 +2073,6 @@ DASHBOARD_HTML = """
           }).catch(function() {
             document.getElementById('drillBody').innerHTML = '<p class="text-red-600">Failed to load ads.</p>';
           });
-        });
-      });
-      document.querySelectorAll('.improve-again').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-          var runId = btn.getAttribute('data-run-id');
-          if (!runId) return;
-          btn.disabled = true;
-          fetch('/api/iterate_campaign', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ run_id: runId, max_extra_iterations: 3 }) }).then(function(r) { return r.json(); }).then(function(data) {
-            if (!data.ok) { btn.disabled = false; alert(data.error || 'Failed'); return; }
-            var iv = setInterval(function() {
-              fetch('/api/status').then(function(r) { return r.json(); }).then(function(s) {
-                if (s.status === 'done' && s.result) { clearInterval(iv); btn.disabled = false; alert('Done. Refresh to see new campaign.'); fetch('/api/run_history').then(function(r) { return r.json(); }).then(function(runs) { allRuns = runs || []; renderCampaigns(allRuns); }); }
-                else if (s.status === 'error') { clearInterval(iv); btn.disabled = false; alert('Error: ' + (s.error || '')); }
-              });
-            }, 1500);
-          }).catch(function() { btn.disabled = false; alert('Request failed'); });
         });
       });
     }

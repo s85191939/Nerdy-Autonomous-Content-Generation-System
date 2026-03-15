@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 # Rough $ per 1M tokens (input, output) for estimation. Update as needed.
 PRICING_PER_1M = {
     "gemini": (0.075, 0.30),
-    "openrouter": (0.0, 0.0),  # free tier
+    "openrouter": (0.075, 0.30),  # gemini-2.0-flash via OpenRouter
     "openai": (0.15, 0.60),     # gpt-4o-mini approx
 }
 
@@ -25,11 +25,12 @@ class TokenTracker:
         self._by_call.append({"input": input_tokens, "output": output_tokens})
 
     def add_from_usage(self, usage: Optional[Dict[str, int]]) -> None:
-        if not usage:
+        if usage is None:
             return
         inp = usage.get("input_tokens") or usage.get("prompt_tokens", 0)
         out = usage.get("output_tokens") or usage.get("candidates_token_count") or usage.get("completion_tokens", 0)
-        self.add(inp, out)
+        if inp or out:
+            self.add(inp, out)
 
     @property
     def total_tokens(self) -> int:
@@ -67,11 +68,11 @@ class TokenTracker:
 
 def usage_from_response(response: Any) -> Optional[Dict[str, int]]:
     """Extract {input_tokens, output_tokens} from Gemini or wrapper response."""
-    # Our wrappers (OpenRouter, OpenAI, FallbackLLM)
+    # Our wrappers (OpenRouter, OpenAI, FallbackLLM) store .usage as dict
     u = getattr(response, "usage", None)
-    if isinstance(u, dict):
+    if isinstance(u, dict) and u:
         return u
-    # Gemini
+    # Gemini native: .usage_metadata is a protobuf-like object
     meta = getattr(response, "usage_metadata", None)
     if meta is not None:
         return {
