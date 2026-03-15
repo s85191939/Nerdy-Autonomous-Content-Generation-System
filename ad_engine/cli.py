@@ -595,6 +595,17 @@ def improve_single_ad(ad_id: str, output_dir: str, quality_threshold: float = No
     backend = _infer_backend()
     token_tracker = TokenTracker(backend=backend)
     generator = AdGenerator(seed=42, token_tracker=token_tracker)
+    # Load competitor reference insights
+    try:
+        generator._reference_insights = load_insights(out_dir / "competitor_insights.json")
+    except Exception:
+        generator._reference_insights = None
+    # Load cross-run learned insights (prompt learning)
+    try:
+        from ad_engine.learning.insights import load_learned_insights
+        generator._learned_insights = load_learned_insights(out_dir / "learned_insights.json")
+    except Exception:
+        generator._learned_insights = None
     evaluator = Evaluator(seed=42, token_tracker=token_tracker, dimension_weights=DIMENSION_WEIGHTS)
     engine = IterationEngine(generator=generator, evaluator=evaluator, quality_threshold=quality_threshold, max_iterations=2)
     existing_history = list(ad_record.get("iteration_history", []))

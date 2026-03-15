@@ -251,6 +251,20 @@ Return ONLY the JSON array, no other text."""
     ) -> dict:
         """Internal improve; may raise."""
         system = build_ad_generation_system(brief)
+        # Inject competitor reference insights (same as generate path)
+        insights = getattr(self, "_reference_insights", None)
+        if insights and isinstance(insights, dict):
+            hooks = insights.get("hooks") or []
+            ctas = insights.get("ctas") or []
+            angles = insights.get("tone_angles") or []
+            if hooks or ctas or angles:
+                snippet = REFERENCE_PATTERNS_SNIPPET.format(hooks=", ".join(hooks[:5]) or "N/A", ctas=", ".join(ctas[:5]) or "N/A", tone_angles=", ".join(angles[:4]) or "N/A")
+                system = system + snippet
+        # Inject cross-run learned insights (prompt learning)
+        learned = getattr(self, "_learned_insights", None)
+        if learned and isinstance(learned, dict) and learned.get("golden_rules"):
+            from ad_engine.learning.insights import format_learned_snippet
+            system = system + format_learned_snippet(learned)
         user_context_suffix = ""
         if user_context:
             user_context_suffix = "\nUser instructions: " + user_context
